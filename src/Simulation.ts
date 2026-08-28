@@ -11,7 +11,7 @@ import { UIController } from "./ui/UIController";
 import { AirfoilDragController } from "./ui/AirfoilDragController";
 
 const PARTICLE_COLOR: [number, number, number] = [0.85, 0.95, 1.0];
-const PARTICLE_POINT_SIZE = 2.6;
+const PARTICLE_POINT_SIZE = 3.9;
 
 export class Simulation {
   private glCtx: GLContext;
