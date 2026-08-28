@@ -39,6 +39,6 @@ export const DEFAULT_SOLVER_PARAMS: SolverParams = {
   dt: 1 / 60,
   tickRate: 1,
   particleCount: 20000,
-  trailLength: 0.94,
-  pressureScale: 1.0,
+  trailLength: 0.975,
+  pressureScale: 1.2,
 };
