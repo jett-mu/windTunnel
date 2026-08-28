@@ -1,0 +1,229 @@
+.panel {
+  position: absolute;
+  top: 0;
+  right: 0;
+  width: 300px;
+  height: 100%;
+  overflow-y: auto;
+  background: rgba(8, 12, 18, 0.92);
+  border-left: 1px solid rgba(140, 170, 200, 0.18);
+  padding: 18px 16px 32px;
+  backdrop-filter: blur(6px);
+  font-size: 12px;
+  z-index: 10;
+}
+
+.panel h1 {
+  font-size: 13px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #8fd6ff;
+  margin: 0 0 14px;
+  font-weight: 600;
+}
+
+.panel h2 {
+  font-size: 10px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: #6d8298;
+  margin: 20px 0 8px;
+  border-bottom: 1px solid rgba(140, 170, 200, 0.15);
+  padding-bottom: 4px;
+}
+
+.readout-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px 10px;
+  margin-bottom: 4px;
+}
+
+.readout {
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(140, 170, 200, 0.12);
+  border-radius: 4px;
+  padding: 6px 8px;
+}
+
+.readout .label {
+  display: block;
+  color: #6d8298;
+  font-size: 9px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  margin-bottom: 2px;
+}
+
+.readout .value {
+  display: block;
+  color: #e3edf5;
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
+
+.slider-row {
+  margin-bottom: 12px;
+}
+
+.slider-row .top {
+  display: flex;
+  justify-content: space-between;
+  color: #a9bdd0;
+  margin-bottom: 4px;
+}
+
+.slider-row .top .value {
+  color: #8fd6ff;
+  font-variant-numeric: tabular-nums;
+}
+
+.slider-row input[type="range"] {
+  width: 100%;
+  accent-color: #4fb6f0;
+  cursor: pointer;
+}
+
+.graph-wrap {
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(140, 170, 200, 0.12);
+  border-radius: 4px;
+  padding: 8px 8px 6px;
+  margin-bottom: 4px;
+}
+
+.graph-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 6px;
+}
+
+.graph-legend {
+  display: flex;
+  gap: 12px;
+  font-size: 10px;
+  letter-spacing: 0.04em;
+}
+
+.graph-legend-item {
+  display: flex;
+  align-items: center;
+  color: #a9bdd0;
+}
+
+.graph-legend-item::before {
+  content: "";
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 2px;
+  margin-right: 6px;
+}
+
+.graph-legend-item.cl::before {
+  background: #4fd6a8;
+}
+
+.graph-legend-item.cd::before {
+  background: #ff6b5c;
+}
+
+.graph-legend-value {
+  color: #e3edf5;
+  font-variant-numeric: tabular-nums;
+}
+
+.graph-reset {
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(140, 170, 200, 0.25);
+  color: #a9bdd0;
+  border-radius: 4px;
+  padding: 2px 9px;
+  font-size: 9px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  cursor: pointer;
+  font-family: inherit;
+}
+
+.graph-reset:hover {
+  background: rgba(255, 255, 255, 0.12);
+  color: #e3edf5;
+  border-color: rgba(140, 170, 200, 0.4);
+}
+
+.graph-canvas-wrap {
+  position: relative;
+  height: 110px;
+}
+
+.graph-canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+  cursor: crosshair;
+}
+
+.graph-tooltip {
+  position: absolute;
+  pointer-events: none;
+  background: rgba(8, 12, 18, 0.95);
+  border: 1px solid rgba(140, 170, 200, 0.3);
+  border-radius: 4px;
+  padding: 3px 6px;
+  font-size: 9px;
+  line-height: 1.5;
+  color: #e3edf5;
+  text-align: center;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+.graph-mean-footer {
+  display: flex;
+  justify-content: space-between;
+  margin-top: 6px;
+  padding-top: 6px;
+  border-top: 1px dashed rgba(140, 170, 200, 0.15);
+  font-size: 9px;
+  letter-spacing: 0.03em;
+  font-variant-numeric: tabular-nums;
+}
+
+.graph-mean-item {
+  display: flex;
+  align-items: center;
+  color: #a9bdd0;
+}
+
+.graph-mean-item::before {
+  content: "";
+  display: inline-block;
+  width: 10px;
+  height: 0;
+  border-top: 1px dashed currentColor;
+  margin-right: 5px;
+}
+
+.graph-mean-item.cl {
+  color: #4fd6a8;
+}
+
+.graph-mean-item.cd {
+  color: #ff6b5c;
+}
+
+.fps-badge {
+  position: absolute;
+  top: 12px;
+  left: 12px;
+  background: rgba(8, 12, 18, 0.75);
+  border: 1px solid rgba(140, 170, 200, 0.18);
+  border-radius: 4px;
+  padding: 5px 10px;
+  color: #8fd6ff;
+  font-size: 12px;
+  z-index: 10;
+  letter-spacing: 0.03em;
+}
