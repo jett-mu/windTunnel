@@ -176,9 +176,9 @@ export class RollingGraph {
 
     // Y-axis gridlines + labels.
     const yTicks = 4;
-    ctx.strokeStyle = "rgba(140,170,200,0.12)";
-    ctx.fillStyle = "#6d8298";
-    ctx.font = "9px ui-monospace, monospace";
+    ctx.strokeStyle = "rgba(22,24,26,0.08)";
+    ctx.fillStyle = "#8a8d90";
+    ctx.font = "9px 'Kode Mono', ui-monospace, monospace";
     ctx.textAlign = "right";
     ctx.textBaseline = "middle";
     for (let i = 0; i <= yTicks; i++) {
@@ -193,7 +193,7 @@ export class RollingGraph {
 
     // Zero line, brighter.
     if (0 > lo && 0 < hi) {
-      ctx.strokeStyle = "rgba(140,170,200,0.35)";
+      ctx.strokeStyle = "rgba(185,179,164,0.7)";
       ctx.beginPath();
       const y0 = Math.round(toY(0)) + 0.5;
       ctx.moveTo(LEFT_MARGIN, y0);
@@ -207,12 +207,12 @@ export class RollingGraph {
     for (let sAgo = 0; sAgo <= WINDOW_S; sAgo += 5) {
       const t = now - sAgo;
       const x = toX(t);
-      ctx.strokeStyle = "rgba(140,170,200,0.08)";
+      ctx.strokeStyle = "rgba(22,24,26,0.06)";
       ctx.beginPath();
       ctx.moveTo(Math.round(x) + 0.5, TOP_MARGIN);
       ctx.lineTo(Math.round(x) + 0.5, TOP_MARGIN + plotH);
       ctx.stroke();
-      ctx.fillStyle = "#6d8298";
+      ctx.fillStyle = "#8a8d90";
       // Right-align the "now" label so it doesn't spill past the canvas edge.
       ctx.textAlign = sAgo === 0 ? "right" : "center";
       ctx.fillText(sAgo === 0 ? "now" : `-${sAgo}s`, sAgo === 0 ? x + 2 : x, TOP_MARGIN + plotH + 3);
@@ -232,8 +232,8 @@ export class RollingGraph {
       });
       ctx.stroke();
     };
-    drawTrace("cd", "#ff6b5c");
-    drawTrace("cl", "#4fd6a8");
+    drawTrace("cd", "#d93c11");
+    drawTrace("cl", "#16181a");
 
     // Dashed mean line for each trace over the currently visible window,
     // plus the numeric mean values shown in the footer below the chart.
@@ -251,8 +251,8 @@ export class RollingGraph {
       ctx.stroke();
       ctx.setLineDash([]);
     };
-    if (cds.length > 0) drawMean(cdMean, "rgba(255,107,92,0.7)");
-    if (cls.length > 0) drawMean(clMean, "rgba(79,214,168,0.7)");
+    if (cds.length > 0) drawMean(cdMean, "rgba(217,60,17,0.7)");
+    if (cls.length > 0) drawMean(clMean, "rgba(22,24,26,0.6)");
     this.clMeanEl.textContent = `mean Cl ${clMean.toFixed(3)}`;
     this.cdMeanEl.textContent = `mean Cd ${cdMean.toFixed(3)}`;
 
@@ -270,7 +270,7 @@ export class RollingGraph {
       }
       const x = toX(nearest.t);
       if (x >= LEFT_MARGIN && x <= LEFT_MARGIN + plotW) {
-        ctx.strokeStyle = "rgba(230,240,250,0.5)";
+        ctx.strokeStyle = "rgba(22,24,26,0.35)";
         ctx.lineWidth = 1;
         ctx.beginPath();
         ctx.moveTo(Math.round(x) + 0.5, TOP_MARGIN);
