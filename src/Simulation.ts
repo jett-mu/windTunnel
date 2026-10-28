@@ -9,6 +9,7 @@ import { ForceCalculator } from "./forces/ForceCalculator";
 import { Renderer } from "./render/Renderer";
 import { UIController } from "./ui/UIController";
 import { AirfoilDragController } from "./ui/AirfoilDragController";
+import { GpuTimer } from "./gl/GpuTimer";
 
 const PARTICLE_COLOR: [number, number, number] = [0.85, 0.95, 1.0];
 const PARTICLE_POINT_SIZE = 3.9;
@@ -28,6 +29,8 @@ export class Simulation {
   private fps = 60;
   private simTime = 0;
   private container: HTMLElement;
+  private timer: GpuTimer;
+  private cpuMs = 0;
 
   constructor(container: HTMLElement) {
     this.container = container;
@@ -40,6 +43,7 @@ export class Simulation {
     this.airfoil = new Airfoil(GRID_W, GRID_H, DEFAULT_AIRFOIL_PARAMS);
     this.obstacleMask = new ObstacleMask(this.glCtx.gl, GRID_W, GRID_H);
     this.params = { ...DEFAULT_SOLVER_PARAMS };
+    this.timer = new GpuTimer(this.glCtx.gl, new URLSearchParams(location.search).has("debug"));
 
     this.resizeCanvas();
     this.particles = new ParticleSystem(
@@ -85,12 +89,19 @@ export class Simulation {
     // without any loss of per-step quality.
     const dt = this.params.dt;
     const ticks = Math.max(1, Math.round(this.params.tickRate));
+    const cpuStart = performance.now();
+    this.timer.begin("solver");
     for (let i = 0; i < ticks; i++) {
       this.solver.step(dt, this.params, this.obstacleMask.getTexture());
+    }
+    this.timer.end();
+    this.timer.begin("particles");
+    for (let i = 0; i < ticks; i++) {
       this.particles.step(dt, this.solver.getVelocityTexture(), this.obstacleMask.getTexture());
       this.simTime += dt;
     }
     this.particles.render(this.params.trailLength, PARTICLE_POINT_SIZE, PARTICLE_COLOR);
+    this.timer.end();
 
     this.forceCalc.update(
       this.solver.getPressureTexture(),
@@ -99,6 +110,7 @@ export class Simulation {
       this.params.viscosity
     );
 
+    this.timer.begin("render");
     this.renderer.render(
       this.solver.getPressureTexture(),
       this.obstacleMask.getTexture(),
@@ -106,8 +118,22 @@ export class Simulation {
       this.params.pressureScale,
       this.forceCalc.getLatestForces()
     );
+    this.timer.end();
 
     this.ui.updateReadouts(this.forceCalc.getLatestForces(), this.fps, this.simTime);
+    this.cpuMs += (performance.now() - cpuStart - this.cpuMs) * 0.1;
+    if (this.timer.enabled) {
+      this.timer.poll();
+      const f = (label: string, div = 1) => {
+        const ms = this.timer.get(label);
+        return ms === undefined ? "--" : (ms / div).toFixed(2);
+      };
+      this.ui.setDebugText(
+        `${this.fps.toFixed(0)} fps · cpu ${this.cpuMs.toFixed(2)}ms\n` +
+          `solver ${f("solver", ticks)}ms/step\n` +
+          `particles ${f("particles")}ms · render ${f("render")}ms`
+      );
+    }
 
     requestAnimationFrame(this.frame);
   };

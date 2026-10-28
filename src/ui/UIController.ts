@@ -38,6 +38,7 @@ export class UIController {
   private solverParams: SolverParams;
   private airfoil: Airfoil;
   private onParticleCountChange: (n: number) => void;
+  private debugText: string | null = null;
 
   constructor(
     container: HTMLElement,
@@ -304,6 +305,10 @@ export class UIController {
     return { row, input, valueEl: value };
   }
 
+  setDebugText(text: string): void {
+    this.debugText = text;
+  }
+
   updateReadouts(forces: ForceResult, fps: number, simTime: number): void {
     // The AoA slider can also be changed externally (dragging the wing in
     // the canvas), so keep its displayed position/value in sync every frame.
@@ -321,7 +326,7 @@ export class UIController {
     this.readouts.q.textContent = forces.dynamicPressure.toFixed(1);
     this.readouts.airspeed.textContent = this.solverParams.airspeed.toFixed(0);
     this.readouts.aoa.textContent = this.airfoil.params.aoaDeg.toFixed(1);
-    this.fpsBadge.textContent = `${fps.toFixed(0)} fps`;
+    this.fpsBadge.textContent = this.debugText ?? `${fps.toFixed(0)} fps`;
     this.graph.push(forces.cl, forces.cd, simTime);
   }
 }
