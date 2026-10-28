@@ -8,6 +8,8 @@ uniform vec2 uVelScale;
 uniform float uDt;
 uniform float uMaxAge;
 uniform int uFrame;
+/** Inlet width (uv) that the inflow sweeps through in one step. */
+uniform float uInjectWidth;
 
 out vec3 vPosAge;
 
@@ -62,7 +64,11 @@ void main() {
   if (dead) {
     uint id = uint(gl_VertexID);
     uint frame = uint(uFrame);
-    pos = vec2(0.004 + rand(id, frame) * 0.01, rand(id + 0x9e3779b9u, frame));
+    // Respawn uniformly across exactly the strip the inflow advances
+    // through in one step. A fixed-width strip narrower than that left a
+    // gap behind each step's batch, and the batches travelled downstream as
+    // vertical bands at high airspeed.
+    pos = vec2(0.002 + rand(id, frame) * uInjectWidth, rand(id + 0x9e3779b9u, frame));
     age = 0.0;
   }
 

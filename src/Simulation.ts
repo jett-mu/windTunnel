@@ -17,8 +17,9 @@ import { encodeState, decodeState } from "./state/UrlState";
 import { wallSlip } from "./solver/wallModel";
 
 const PARTICLE_COLOR: [number, number, number] = [0.85, 0.95, 1.0];
-/** CSS pixels; scaled by the backing-store DPR so particles look the same on any display. */
-const PARTICLE_POINT_SIZE_CSS = 1.95;
+/** Streak width in CSS pixels; scaled by the backing-store DPR so particles
+ * look the same on any display. */
+const PARTICLE_WIDTH_CSS = 1.2;
 /** Cap on solver steps per frame: if the GPU can't keep up, slow simulated
  * time down instead of spiralling into ever-longer frames. */
 const MAX_STEPS_PER_FRAME = 8;
@@ -284,26 +285,23 @@ export class Simulation {
     }
 
     this.timer.begin("particles");
-    for (let i = 0; i < steps; i++) {
-      this.particles.step(dt, this.solver.getVelocityTexture(), obstacle, this.params.airspeed);
-      this.simTime += dt;
-    }
     if (!this.paused) this.trailWallS += wallDt;
     if (steps > 0) {
       // Trail fade is per wall-clock time (one `trailLength` factor per
       // 60 Hz frame), so trails look the same length at any refresh rate.
       const frames = this.paused ? steps : this.trailWallS * 60;
       this.trailWallS = 0;
-      this.particles.render(
-        Math.pow(this.params.trailLength, frames),
-        {
-          pointSize: PARTICLE_POINT_SIZE_CSS * GLContext.dpr(),
-          color: PARTICLE_COLOR,
-          colorBySpeed: this.params.particleColor === "speed",
-        },
-        this.solver.getVelocityTexture(),
-        this.params.airspeed
-      );
+      this.particles.fadeTrails(Math.pow(this.params.trailLength, frames));
+    }
+    const style = {
+      width: PARTICLE_WIDTH_CSS * GLContext.dpr(),
+      color: PARTICLE_COLOR,
+      colorBySpeed: this.params.particleColor === "speed",
+    };
+    for (let i = 0; i < steps; i++) {
+      this.particles.step(dt, this.solver.getVelocityTexture(), obstacle, this.params.airspeed);
+      this.particles.drawStreaks(style, this.solver.getVelocityTexture(), this.params.airspeed, steps);
+      this.simTime += dt;
     }
     this.timer.end();
 

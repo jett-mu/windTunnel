@@ -16,9 +16,12 @@ import particleRenderFrag from "./shaders/particleRender.frag?raw";
 const LIFETIME_CROSSINGS = 1.5;
 const MIN_MAX_AGE_S = 2;
 const MAX_MAX_AGE_S = 60;
+/** Streaks up to this many widths long draw at full opacity (see uInkLength). */
+const INK_LENGTH_WIDTHS = 2;
 
 export interface ParticleStyle {
-  pointSize: number;
+  /** Streak width, device pixels. */
+  width: number;
   color: [number, number, number];
   colorBySpeed: boolean;
 }
@@ -39,7 +42,8 @@ export class ParticleSystem {
 
   private buffers: [WebGLBuffer, WebGLBuffer];
   private updateVaos: [WebGLVertexArrayObject, WebGLVertexArrayObject];
-  private renderVaos: [WebGLVertexArrayObject, WebGLVertexArrayObject];
+  /** streakVaos[k]: buffer k as the current position, the other as the previous. */
+  private streakVaos: [WebGLVertexArrayObject, WebGLVertexArrayObject];
   private current = 0;
   private count: number;
   private frame = 0;
@@ -69,7 +73,7 @@ export class ParticleSystem {
     const [bufA, bufB] = this.createBuffers(this.count);
     this.buffers = [bufA, bufB];
     this.updateVaos = [this.makeVao(bufA), this.makeVao(bufB)];
-    this.renderVaos = [this.makeVao(bufA), this.makeVao(bufB)];
+    this.streakVaos = [this.makeStreakVao(bufA, bufB), this.makeStreakVao(bufB, bufA)];
   }
 
   /** Lifetime scales with airspeed so particles can always cross the tunnel. */
@@ -115,6 +119,22 @@ export class ParticleSystem {
     return vao;
   }
 
+  /** Instanced: one streak quad per particle, reading its current and previous state. */
+  private makeStreakVao(curr: WebGLBuffer, prev: WebGLBuffer): WebGLVertexArrayObject {
+    const gl = this.gl;
+    const vao = gl.createVertexArray();
+    if (!vao) throw new Error("Failed to create particle streak VAO");
+    gl.bindVertexArray(vao);
+    [curr, prev].forEach((buf, loc) => {
+      gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+      gl.enableVertexAttribArray(loc);
+      gl.vertexAttribPointer(loc, 3, gl.FLOAT, false, 0, 0);
+      gl.vertexAttribDivisor(loc, 1);
+    });
+    gl.bindVertexArray(null);
+    return vao;
+  }
+
   setParticleCount(n: number): void {
     if (n === this.count) return;
     const gl = this.gl;
@@ -122,14 +142,14 @@ export class ParticleSystem {
     gl.deleteBuffer(this.buffers[1]);
     gl.deleteVertexArray(this.updateVaos[0]);
     gl.deleteVertexArray(this.updateVaos[1]);
-    gl.deleteVertexArray(this.renderVaos[0]);
-    gl.deleteVertexArray(this.renderVaos[1]);
+    gl.deleteVertexArray(this.streakVaos[0]);
+    gl.deleteVertexArray(this.streakVaos[1]);
 
     this.count = n;
     const [bufA, bufB] = this.createBuffers(n);
     this.buffers = [bufA, bufB];
     this.updateVaos = [this.makeVao(bufA), this.makeVao(bufB)];
-    this.renderVaos = [this.makeVao(bufA), this.makeVao(bufB)];
+    this.streakVaos = [this.makeStreakVao(bufA, bufB), this.makeStreakVao(bufB, bufA)];
     this.current = 0;
   }
 
@@ -163,6 +183,7 @@ export class ParticleSystem {
     this.updateShader.setFloat("uDt", dt);
     this.updateShader.setFloat("uMaxAge", ParticleSystem.maxAge(airspeed));
     this.updateShader.setInt("uFrame", this.frame++ & 0x7fffffff);
+    this.updateShader.setFloat("uInjectWidth", Math.max(airspeed * dt, 1) / GRID_W);
 
     gl.bindVertexArray(this.updateVaos[this.current]);
     gl.enable(gl.RASTERIZER_DISCARD);
@@ -177,24 +198,29 @@ export class ParticleSystem {
     this.current = 1 - this.current;
   }
 
-  /**
-   * Fades the trail-accumulation buffer, then draws the latest particle
-   * positions on top of it. `trailAccum.read` holds the composited result
-   * afterward, ready for the Renderer to sample.
-   */
-  render(decay: number, style: ParticleStyle, velocityTexture: WebGLTexture, airspeed: number): void {
-    const gl = this.gl;
-
-    // 1. Decay previous trail contents into the write side.
+  /** Fades the trail-accumulation buffer once per frame, before this frame's streaks are drawn. */
+  fadeTrails(decay: number): void {
     this.trailAccum.write.bind();
-    gl.disable(gl.BLEND);
+    this.gl.disable(this.gl.BLEND);
     this.trailDecayShader.use();
     this.trailDecayShader.setTexture(0, "uPrev", this.trailAccum.read.texture);
     this.trailDecayShader.setFloat("uDecay", decay);
     this.quad.draw();
     this.trailAccum.swap();
+  }
 
-    // 2. Draw fresh particle points directly onto the now-faded buffer.
+  /**
+   * Draws every particle's movement over the latest step as a streak onto
+   * the trail buffer. Call after each `step()`, so the streaks of a frame's
+   * several steps join up. `trailAccum.read` holds the composited result,
+   * ready for the Renderer to sample.
+   */
+  /**
+   * `stepsThisFrame` spreads a frame's ink across its steps, so trail
+   * density doesn't depend on the sim-speed setting.
+   */
+  drawStreaks(style: ParticleStyle, velocityTexture: WebGLTexture, airspeed: number, stepsThisFrame: number): void {
+    const gl = this.gl;
     // Color uses straight-alpha "over"; alpha accumulates as
     // a + dst*(1-a) (not a*a), keeping the buffer premultiplied.
     this.trailAccum.read.bind(true);
@@ -203,12 +229,14 @@ export class ParticleSystem {
     const s = this.renderShader;
     s.use();
     s.setTexture(0, "uVelocity", velocityTexture);
-    s.setFloat("uPointSize", style.pointSize);
+    s.setVec2("uViewport", this.trailW, this.trailH);
+    s.setFloat("uHalfWidth", style.width / 2);
+    s.setFloat("uInkLength", (style.width * INK_LENGTH_WIDTHS) / Math.max(stepsThisFrame, 1));
     s.setVec3("uColor", style.color[0], style.color[1], style.color[2]);
     s.setInt("uColorBySpeed", style.colorBySpeed ? 1 : 0);
     s.setFloat("uFreestream", airspeed);
-    gl.bindVertexArray(this.renderVaos[this.current]);
-    gl.drawArrays(gl.POINTS, 0, this.count);
+    gl.bindVertexArray(this.streakVaos[this.current]);
+    gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, this.count);
     gl.bindVertexArray(null);
     gl.disable(gl.BLEND);
   }
