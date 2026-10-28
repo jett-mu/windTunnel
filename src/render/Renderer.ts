@@ -4,8 +4,9 @@ import { FullscreenQuad } from "../gl/FullscreenQuad";
 import { Airfoil } from "../airfoil/Airfoil";
 import type { ForceResult } from "../forces/ForceCalculator";
 import { GRID_W, GRID_H } from "../solver/SolverParams";
+import type { ViewMode } from "../solver/SolverParams";
 import type { Vec2 } from "../gl/math";
-import { normalize, perp, scale as vscale, add } from "../gl/math";
+import { perp, scale as vscale, add } from "../gl/math";
 
 import passthroughVert from "../solver/shaders/passthrough.vert?raw";
 import pressureFieldFrag from "../render/shaders/pressureField.frag?raw";
@@ -13,14 +14,17 @@ import shapeVert from "../render/shaders/shape.vert?raw";
 import shapeFrag from "../render/shaders/shape.frag?raw";
 
 const ARROW_MIN_LEN = 5;
-const ARROW_MAX_LEN = 70;
-// Tuned so a "normal" ~10,000-unit force lands well below max, leaving
-// headroom before the arrow clips.
-const ARROW_SCALE = 0.003;
+const ARROW_MAX_LEN = 90;
+/** Grid texels of arrow per unit of force coefficient, so arrow length is
+ * comparable across airspeeds, densities and body sizes. */
+const ARROW_PER_COEFF = 40;
 const ARROW_WIDTH = 2.5;
 
-function buildArrow(origin: Vec2, dir: Vec2, magnitude: number): number[] {
-  const len = Math.min(ARROW_MAX_LEN, Math.max(ARROW_MIN_LEN, Math.abs(magnitude) * ARROW_SCALE));
+const VIEW_MODE_INDEX: Record<ViewMode, number> = { pressure: 0, speed: 1, vorticity: 2, none: 3 };
+
+/** Writes a 3-triangle arrow into `out` (18 floats). */
+function buildArrow(out: Float32Array, origin: Vec2, dir: Vec2, magnitude: number): void {
+  const len = Math.min(ARROW_MAX_LEN, Math.max(ARROW_MIN_LEN, Math.abs(magnitude) * ARROW_PER_COEFF));
   const facing = magnitude >= 0 ? dir : vscale(dir, -1);
   const n = perp(facing);
   const tip = add(origin, vscale(facing, len));
@@ -35,23 +39,38 @@ function buildArrow(origin: Vec2, dir: Vec2, magnitude: number): number[] {
   const h0 = add(headBase, vscale(n, halfHead));
   const h1 = add(headBase, vscale(n, -halfHead));
 
-  return [
+  out.set([
     s0.x, s0.y, s1.x, s1.y, s2.x, s2.y,
     s1.x, s1.y, s3.x, s3.y, s2.x, s2.y,
     h0.x, h0.y, h1.x, h1.y, tip.x, tip.y,
-  ];
+  ]);
+}
+
+export interface FieldTextures {
+  pressure: WebGLTexture;
+  obstacle: WebGLTexture;
+  trail: WebGLTexture;
+  velocity: WebGLTexture;
+  vorticity: WebGLTexture;
+}
+
+export interface RenderOptions {
+  viewMode: ViewMode;
+  scale: number;
+  dt: number;
+  airspeed: number;
 }
 
 /**
- * Final compositing stage: pressure heatmap + particle trails (already
- * blended together in `pressureField.frag`) as a fullscreen pass, then the
- * airfoil outline and lift/drag force arrows drawn as flat-colored geometry
- * on top.
+ * Final compositing stage: the selected background field (Cp, speed or
+ * vorticity) + particle trails, blended together in `pressureField.frag` as
+ * a fullscreen pass, then the body outline and lift/drag force arrows drawn
+ * as flat-colored geometry on top.
  */
 export class Renderer {
   private gl: WebGL2RenderingContext;
   private quad: FullscreenQuad;
-  private pressureShader: Shader;
+  private fieldShader: Shader;
   private shapeShader: Shader;
 
   private outlineVao: WebGLVertexArrayObject;
@@ -61,6 +80,7 @@ export class Renderer {
 
   private arrowVao: WebGLVertexArrayObject;
   private arrowBuffer: WebGLBuffer;
+  private arrowVerts = new Float32Array(18);
 
   private glCtx: GLContext;
   private airfoil: Airfoil;
@@ -71,7 +91,7 @@ export class Renderer {
     const gl = glCtx.gl;
     this.gl = gl;
     this.quad = new FullscreenQuad(gl);
-    this.pressureShader = new Shader(gl, passthroughVert, pressureFieldFrag);
+    this.fieldShader = new Shader(gl, passthroughVert, pressureFieldFrag);
     this.shapeShader = new Shader(gl, shapeVert, shapeFrag);
 
     const outlineBuffer = gl.createBuffer();
@@ -94,6 +114,7 @@ export class Renderer {
     this.arrowVao = arrowVao;
     gl.bindVertexArray(arrowVao);
     gl.bindBuffer(gl.ARRAY_BUFFER, arrowBuffer);
+    gl.bufferData(gl.ARRAY_BUFFER, this.arrowVerts.byteLength, gl.DYNAMIC_DRAW);
     gl.enableVertexAttribArray(0);
     gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
     gl.bindVertexArray(null);
@@ -116,28 +137,36 @@ export class Renderer {
     gl.bufferData(gl.ARRAY_BUFFER, data, gl.DYNAMIC_DRAW);
   }
 
-  render(
-    pressureTexture: WebGLTexture,
-    obstacleTexture: WebGLTexture,
-    trailTexture: WebGLTexture,
-    pressureScale: number,
-    forces: ForceResult
-  ): void {
+  private drawArrow(anchor: Vec2, dir: Vec2, magnitude: number, color: [number, number, number, number]): void {
+    const gl = this.gl;
+    buildArrow(this.arrowVerts, anchor, dir, magnitude);
+    gl.bufferSubData(gl.ARRAY_BUFFER, 0, this.arrowVerts);
+    this.shapeShader.setVec4("uColor", color[0], color[1], color[2], color[3]);
+    gl.drawArrays(gl.TRIANGLES, 0, 9);
+  }
+
+  render(tex: FieldTextures, opts: RenderOptions, forces: ForceResult): void {
     const gl = this.gl;
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
     gl.viewport(0, 0, this.glCtx.canvas.width, this.glCtx.canvas.height);
     gl.disable(gl.BLEND);
 
-    // 1. Pressure heatmap + trails, composited in one fullscreen pass.
-    this.pressureShader.use();
-    this.pressureShader.setTexture(0, "uPressure", pressureTexture);
-    this.pressureShader.setTexture(1, "uObstacle", obstacleTexture);
-    this.pressureShader.setTexture(2, "uTrail", trailTexture);
-    this.pressureShader.setFloat("uPressureScale", pressureScale);
-    this.pressureShader.setFloat("uDynamicPressure", Math.max(forces.dynamicPressure, 1e-4));
+    // 1. Background field + trails, composited in one fullscreen pass.
+    const fs = this.fieldShader;
+    fs.use();
+    fs.setTexture(0, "uPressure", tex.pressure);
+    fs.setTexture(1, "uObstacle", tex.obstacle);
+    fs.setTexture(2, "uTrail", tex.trail);
+    fs.setTexture(3, "uVelocity", tex.velocity);
+    fs.setTexture(4, "uVorticity", tex.vorticity);
+    fs.setInt("uViewMode", VIEW_MODE_INDEX[opts.viewMode]);
+    fs.setFloat("uScale", opts.scale);
+    fs.setFloat("uDt", opts.dt);
+    fs.setFloat("uFreestream", opts.airspeed);
+    fs.setFloat("uRefLength", this.airfoil.getReferenceLength());
     this.quad.draw();
 
-    // 2. Airfoil outline.
+    // 2. Body outline.
     this.updateOutline();
     this.shapeShader.use();
     this.shapeShader.setVec2("uGridSize", GRID_W, GRID_H);
@@ -146,34 +175,16 @@ export class Renderer {
     gl.drawArrays(gl.LINE_LOOP, 0, this.outlineCount);
     gl.bindVertexArray(null);
 
-    // 3. Force vector arrows, anchored at the quarter-chord point.
-    const anchor: Vec2 = {
-      x: this.airfoil.params.posXFrac * GRID_W,
-      y: this.airfoil.params.posYFrac * GRID_H,
-    };
-
+    // 3. Force vector arrows, anchored at the pitch axis. World +y renders
+    // toward screen "up" (the shape.vert clip transform and the obstacle
+    // mask agree on that), matching ForceCalculator's +y = lift convention.
+    const anchor = this.airfoil.getPivotWorld();
     gl.enable(gl.BLEND);
     gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
     gl.bindVertexArray(this.arrowVao);
     gl.bindBuffer(gl.ARRAY_BUFFER, this.arrowBuffer);
-
-    // Lift: perpendicular to freestream. World +y renders toward screen "up"
-    // (the shape.vert clip transform and our unflipped obstacle-mask texture
-    // upload agree on that), matching the +y = lift-positive convention in
-    // ForceCalculator.
-    const liftDir = normalize({ x: 0, y: 1 });
-    const liftVerts = buildArrow(anchor, liftDir, forces.lift);
-    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(liftVerts), gl.DYNAMIC_DRAW);
-    this.shapeShader.setVec4("uColor", 0.25, 0.9, 0.35, 0.95);
-    gl.drawArrays(gl.TRIANGLES, 0, liftVerts.length / 2);
-
-    // Drag: along the freestream direction.
-    const dragDir = normalize({ x: 1, y: 0 });
-    const dragVerts = buildArrow(anchor, dragDir, forces.drag);
-    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(dragVerts), gl.DYNAMIC_DRAW);
-    this.shapeShader.setVec4("uColor", 0.95, 0.3, 0.25, 0.95);
-    gl.drawArrays(gl.TRIANGLES, 0, dragVerts.length / 2);
-
+    this.drawArrow(anchor, { x: 0, y: 1 }, forces.cl, [0.25, 0.9, 0.35, 0.95]);
+    this.drawArrow(anchor, { x: 1, y: 0 }, forces.cd, [0.95, 0.3, 0.25, 0.95]);
     gl.bindVertexArray(null);
     gl.disable(gl.BLEND);
   }

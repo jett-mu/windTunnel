@@ -2,14 +2,23 @@
 export const GRID_W = 512;
 export const GRID_H = 256;
 
-export const PRESSURE_ITERATIONS = 80;
-export const DIFFUSE_ITERATIONS = 20;
+/** "multigrid" (default) or "jacobi" (the v1 solver, kept for A/B timing in `?debug`). */
+export const PRESSURE_SOLVER: "multigrid" | "jacobi" = "multigrid";
+export const MULTIGRID_CYCLES = 1;
+export const JACOBI_ITERATIONS = 80;
+/** Velocity safety clamp, as a multiple of freestream speed. */
+export const MAX_SPEED_FACTOR = 6;
+
+export type ViewMode = "pressure" | "speed" | "vorticity" | "none";
+export type ParticleColorMode = "white" | "speed";
 
 /** Single source of truth for every tunable parameter, mutated by UIController. */
 export interface SolverParams {
   /** Freestream airspeed, grid-texels/second. */
   airspeed: number;
-  /** Air density (kg/m^3-ish, arbitrary sim units). */
+  /** Air density (kg/m^3-ish, arbitrary sim units). Scales dimensional
+   * forces only: the flow itself is incompressible, so coefficients are
+   * independent of it. */
   density: number;
   /** Kinematic viscosity, used both in diffusion and Re = V*c/nu. */
   viscosity: number;
@@ -18,14 +27,16 @@ export interface SolverParams {
   /** Simulation timestep, seconds. Held fixed regardless of tick rate — see
    * `tickRate` for how simulation speed is actually controlled. */
   dt: number;
-  /** Number of fixed-size solver sub-steps run per rendered frame. Raising
-   * this speeds up simulated time without changing the timestep itself, so
-   * accuracy/stability per step is unaffected — unlike increasing `dt`,
-   * which would degrade quality. */
+  /** Simulated seconds per wall-clock second. Implemented as more
+   * fixed-size solver sub-steps per second rather than a larger `dt`, so
+   * accuracy/stability per step is unaffected. */
   tickRate: number;
   particleCount: number;
   trailLength: number;
+  /** Contrast of the background field visualization (all view modes). */
   pressureScale: number;
+  viewMode: ViewMode;
+  particleColor: ParticleColorMode;
 }
 
 export const TICK_RATE_MIN = 1;
@@ -40,5 +51,7 @@ export const DEFAULT_SOLVER_PARAMS: SolverParams = {
   tickRate: 1,
   particleCount: 20000,
   trailLength: 0.975,
-  pressureScale: 1.2,
+  pressureScale: 1.0,
+  viewMode: "pressure",
+  particleColor: "white",
 };

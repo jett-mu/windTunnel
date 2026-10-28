@@ -11,6 +11,6 @@ out vec4 outColor;
 // the pressure field that surface sample point actually lives.
 void main() {
   vec2 samplePos = texture(uSampleUV, vUv).xy;
-  float p = texture(uPressure, samplePos).x;
+  float p = sampleLinear(uPressure, samplePos).x;
   outColor = vec4(p, 0.0, 0.0, 0.0);
 }

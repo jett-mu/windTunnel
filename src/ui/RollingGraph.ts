@@ -1,13 +1,13 @@
-interface Sample {
-  t: number; // simulation time, seconds
-  cl: number;
-  cd: number;
-}
+import { downloadText } from "./download";
 
 /** Rolling window width, in simulation seconds (not wall-clock time) — so
  * raising the tick rate makes the chart visibly sweep faster, since more
  * sim-seconds land in the window per real second. */
 const WINDOW_S = 15;
+/** Ring-buffer size: comfortably more than a window's worth of samples at 240 Hz. */
+const CAPACITY = 4096;
+/** Redraw at most this often; the trace moves a fraction of a pixel per frame. */
+const MIN_REDRAW_MS = 33;
 const LEFT_MARGIN = 32;
 const BOTTOM_MARGIN = 14;
 const TOP_MARGIN = 6;
@@ -17,6 +17,7 @@ const RIGHT_MARGIN = 4;
  * A scrolling Cl/Cd strip-chart embedded in the side panel, with labeled
  * axes and an interactive hover crosshair/tooltip. Plain canvas 2D — cheap
  * enough that a GPU pass would be overkill, and simpler to lay out text with.
+ * Samples live in a fixed ring buffer, so pushing never allocates or shifts.
  */
 export class RollingGraph {
   private canvas: HTMLCanvasElement;
@@ -26,10 +27,18 @@ export class RollingGraph {
   private cdValueEl: HTMLElement;
   private clMeanEl: HTMLElement;
   private cdMeanEl: HTMLElement;
-  private samples: Sample[] = [];
+  private ts = new Float64Array(CAPACITY);
+  private cls = new Float32Array(CAPACITY);
+  private cds = new Float32Array(CAPACITY);
+  private cms = new Float32Array(CAPACITY);
+  /** Index of the oldest sample, and how many are stored. */
+  private head = 0;
+  private size = 0;
   private hoverX: number | null = null;
   private latestT = 0;
   private dpr: number;
+  private dirty = true;
+  private lastDraw = 0;
 
   constructor(container: HTMLElement) {
     this.dpr = Math.min(window.devicePixelRatio || 1, 2);
@@ -59,14 +68,24 @@ export class RollingGraph {
     this.clValueEl = clValue;
     this.cdValueEl = cdValue;
 
+    const actions = document.createElement("div");
+    actions.className = "graph-actions";
+    const csvBtn = document.createElement("button");
+    csvBtn.className = "graph-reset";
+    csvBtn.type = "button";
+    csvBtn.textContent = "CSV";
+    csvBtn.title = "Download the visible history as CSV";
+    csvBtn.addEventListener("click", () => downloadText(this.toCSV(), "windtunnel-history.csv"));
     const resetBtn = document.createElement("button");
     resetBtn.className = "graph-reset";
     resetBtn.type = "button";
     resetBtn.textContent = "Reset";
     resetBtn.addEventListener("click", () => this.reset());
+    actions.appendChild(csvBtn);
+    actions.appendChild(resetBtn);
 
     header.appendChild(legend);
-    header.appendChild(resetBtn);
+    header.appendChild(actions);
     bar.appendChild(header);
 
     const canvasWrap = document.createElement("div");
@@ -101,8 +120,8 @@ export class RollingGraph {
     if (!ctx) throw new Error("Failed to acquire 2D context for rolling graph");
     this.ctx = ctx;
 
-    canvas.addEventListener("mousemove", (e) => this.onHover(e));
-    canvas.addEventListener("mouseleave", () => {
+    canvas.addEventListener("pointermove", (e) => this.onHover(e));
+    canvas.addEventListener("pointerleave", () => {
       this.hoverX = null;
       this.tooltip.style.display = "none";
       this.render();
@@ -115,29 +134,65 @@ export class RollingGraph {
 
   private resizeCanvas(): void {
     const rect = this.canvas.parentElement!.getBoundingClientRect();
+    this.dpr = Math.min(window.devicePixelRatio || 1, 2);
     this.canvas.width = Math.max(1, Math.round(rect.width * this.dpr));
     this.canvas.height = Math.max(1, Math.round(rect.height * this.dpr));
     this.render();
   }
 
   reset(): void {
-    this.samples = [];
+    this.head = 0;
+    this.size = 0;
     this.render();
+  }
+
+  private at(i: number): number {
+    return (this.head + i) % CAPACITY;
   }
 
   /** `simTime` is accumulated simulation seconds (not wall-clock time), so
    * the chart's sweep speed tracks the tick rate rather than real time. */
-  push(cl: number, cd: number, simTime: number): void {
+  push(cl: number, cd: number, cm: number, simTime: number): void {
+    // A flow reset or anything else that rewinds time starts a fresh trace.
+    if (simTime < this.latestT) this.size = 0;
     this.latestT = simTime;
-    this.samples.push({ t: simTime, cl, cd });
+    const slot = this.at(this.size);
+    this.ts[slot] = simTime;
+    this.cls[slot] = cl;
+    this.cds[slot] = cd;
+    this.cms[slot] = cm;
+    if (this.size < CAPACITY) this.size++;
+    else this.head = (this.head + 1) % CAPACITY;
     const cutoff = simTime - WINDOW_S;
-    while (this.samples.length > 0 && this.samples[0].t < cutoff) this.samples.shift();
-    this.clValueEl.textContent = `: ${cl.toFixed(3)}`;
-    this.cdValueEl.textContent = `: ${cd.toFixed(3)}`;
+    while (this.size > 0 && this.ts[this.head] < cutoff) {
+      this.head = (this.head + 1) % CAPACITY;
+      this.size--;
+    }
+    this.dirty = true;
+  }
+
+  /** Redraws if new data arrived, throttled. Call once per animation frame. */
+  tick(now: number): void {
+    if (!this.dirty || now - this.lastDraw < MIN_REDRAW_MS) return;
+    this.lastDraw = now;
+    if (this.size > 0) {
+      const last = this.at(this.size - 1);
+      this.clValueEl.textContent = `: ${this.cls[last].toFixed(3)}`;
+      this.cdValueEl.textContent = `: ${this.cds[last].toFixed(3)}`;
+    }
     this.render();
   }
 
-  private onHover(e: MouseEvent): void {
+  toCSV(): string {
+    const rows = ["sim_time_s,cl,cd,cm"];
+    for (let i = 0; i < this.size; i++) {
+      const k = this.at(i);
+      rows.push(`${this.ts[k].toFixed(4)},${this.cls[k].toFixed(5)},${this.cds[k].toFixed(5)},${this.cms[k].toFixed(5)}`);
+    }
+    return rows.join("\n");
+  }
+
+  private onHover(e: PointerEvent): void {
     const rect = this.canvas.getBoundingClientRect();
     this.hoverX = e.clientX - rect.left;
     this.render();
@@ -148,6 +203,7 @@ export class RollingGraph {
   }
 
   private render(): void {
+    this.dirty = false;
     const ctx = this.ctx;
     const { w, h } = this.cssSize();
     ctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
@@ -161,10 +217,20 @@ export class RollingGraph {
     const tMin = now - WINDOW_S;
     const toX = (t: number) => LEFT_MARGIN + ((t - tMin) / WINDOW_S) * plotW;
 
-    const cls = this.samples.map((s) => s.cl);
-    const cds = this.samples.map((s) => s.cd);
-    let lo = Math.min(0, ...cls, ...cds);
-    let hi = Math.max(0, ...cls, ...cds);
+    // One pass for range and means.
+    let lo = 0;
+    let hi = 0;
+    let clSum = 0;
+    let cdSum = 0;
+    for (let i = 0; i < this.size; i++) {
+      const k = this.at(i);
+      const cl = this.cls[k];
+      const cd = this.cds[k];
+      lo = Math.min(lo, cl, cd);
+      hi = Math.max(hi, cl, cd);
+      clSum += cl;
+      cdSum += cd;
+    }
     if (!isFinite(lo) || !isFinite(hi) || hi - lo < 1e-4) {
       lo = -0.1;
       hi = 0.1;
@@ -176,6 +242,7 @@ export class RollingGraph {
 
     // Y-axis gridlines + labels.
     const yTicks = 4;
+    ctx.lineWidth = 1;
     ctx.strokeStyle = "rgba(22,24,26,0.08)";
     ctx.fillStyle = "#8a8d90";
     ctx.font = "9px 'Kode Mono', ui-monospace, monospace";
@@ -188,7 +255,7 @@ export class RollingGraph {
       ctx.moveTo(LEFT_MARGIN, Math.round(y) + 0.5);
       ctx.lineTo(LEFT_MARGIN + plotW, Math.round(y) + 0.5);
       ctx.stroke();
-      ctx.fillText(v.toFixed(2), LEFT_MARGIN - 6, y);
+      ctx.fillText(v.toFixed(Math.abs(hi - lo) < 0.2 ? 3 : 2), LEFT_MARGIN - 6, y);
     }
 
     // Zero line, brighter.
@@ -202,11 +269,9 @@ export class RollingGraph {
     }
 
     // X-axis gridlines + labels, every 5s of the rolling window.
-    ctx.textAlign = "center";
     ctx.textBaseline = "top";
     for (let sAgo = 0; sAgo <= WINDOW_S; sAgo += 5) {
-      const t = now - sAgo;
-      const x = toX(t);
+      const x = toX(now - sAgo);
       ctx.strokeStyle = "rgba(22,24,26,0.06)";
       ctx.beginPath();
       ctx.moveTo(Math.round(x) + 0.5, TOP_MARGIN);
@@ -219,27 +284,27 @@ export class RollingGraph {
     }
 
     // Traces.
-    const drawTrace = (key: "cd" | "cl", color: string) => {
-      if (this.samples.length < 2) return;
+    const drawTrace = (data: Float32Array, color: string) => {
+      if (this.size < 2) return;
       ctx.strokeStyle = color;
       ctx.lineWidth = 1.5;
       ctx.beginPath();
-      this.samples.forEach((s, i) => {
-        const x = toX(s.t);
-        const y = toY(s[key]);
+      for (let i = 0; i < this.size; i++) {
+        const k = this.at(i);
+        const x = toX(this.ts[k]);
+        const y = toY(data[k]);
         if (i === 0) ctx.moveTo(x, y);
         else ctx.lineTo(x, y);
-      });
+      }
       ctx.stroke();
     };
-    drawTrace("cd", "#d93c11");
-    drawTrace("cl", "#16181a");
+    drawTrace(this.cds, "#d93c11");
+    drawTrace(this.cls, "#16181a");
 
     // Dashed mean line for each trace over the currently visible window,
     // plus the numeric mean values shown in the footer below the chart.
-    const mean = (data: number[]) => (data.length === 0 ? 0 : data.reduce((a, b) => a + b, 0) / data.length);
-    const clMean = mean(cls);
-    const cdMean = mean(cds);
+    const clMean = this.size > 0 ? clSum / this.size : 0;
+    const cdMean = this.size > 0 ? cdSum / this.size : 0;
     const drawMean = (value: number, color: string) => {
       const y = Math.round(toY(value)) + 0.5;
       ctx.strokeStyle = color;
@@ -251,24 +316,27 @@ export class RollingGraph {
       ctx.stroke();
       ctx.setLineDash([]);
     };
-    if (cds.length > 0) drawMean(cdMean, "rgba(217,60,17,0.7)");
-    if (cls.length > 0) drawMean(clMean, "rgba(22,24,26,0.6)");
+    if (this.size > 0) {
+      drawMean(cdMean, "rgba(217,60,17,0.7)");
+      drawMean(clMean, "rgba(22,24,26,0.6)");
+    }
     this.clMeanEl.textContent = `mean Cl ${clMean.toFixed(3)}`;
     this.cdMeanEl.textContent = `mean Cd ${cdMean.toFixed(3)}`;
 
     // Hover crosshair + tooltip.
-    if (this.hoverX !== null && this.samples.length > 0) {
+    if (this.hoverX !== null && this.size > 0) {
       const hoverT = tMin + ((this.hoverX - LEFT_MARGIN) / plotW) * WINDOW_S;
-      let nearest = this.samples[0];
+      let nearest = this.head;
       let bestDist = Infinity;
-      for (const s of this.samples) {
-        const d = Math.abs(s.t - hoverT);
+      for (let i = 0; i < this.size; i++) {
+        const k = this.at(i);
+        const d = Math.abs(this.ts[k] - hoverT);
         if (d < bestDist) {
           bestDist = d;
-          nearest = s;
+          nearest = k;
         }
       }
-      const x = toX(nearest.t);
+      const x = toX(this.ts[nearest]);
       if (x >= LEFT_MARGIN && x <= LEFT_MARGIN + plotW) {
         ctx.strokeStyle = "rgba(22,24,26,0.35)";
         ctx.lineWidth = 1;
@@ -277,8 +345,8 @@ export class RollingGraph {
         ctx.lineTo(Math.round(x) + 0.5, TOP_MARGIN + plotH);
         ctx.stroke();
 
-        const ageS = (now - nearest.t).toFixed(1);
-        this.tooltip.innerHTML = `-${ageS}s<br>Cl ${nearest.cl.toFixed(3)}<br>Cd ${nearest.cd.toFixed(3)}`;
+        const ageS = (now - this.ts[nearest]).toFixed(1);
+        this.tooltip.innerHTML = `-${ageS}s<br>Cl ${this.cls[nearest].toFixed(3)}<br>Cd ${this.cds[nearest].toFixed(3)}`;
         this.tooltip.style.display = "block";
         const tooltipWidth = 56;
         const tooltipX = Math.min(Math.max(x - tooltipWidth / 2, 0), w - tooltipWidth);

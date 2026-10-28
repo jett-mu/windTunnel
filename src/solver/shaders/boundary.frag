@@ -3,19 +3,20 @@ precision highp float;
 in vec2 vUv;
 uniform sampler2D uVelocity;
 uniform sampler2D uObstacle;
+uniform sampler2D uNeighbors;
 uniform vec2 uTexel;
 uniform float uInflowSpeed;
 uniform float uMaxSpeed;
 out vec4 outColor;
 
-// Enforces every boundary condition in one pass: no-slip inside/at the
-// obstacle, Dirichlet inflow at the left edge, zero-gradient outflow at the
-// right edge, and free-slip tunnel walls at top/bottom. Run twice per frame
-// (pre- and post-pressure-projection) so obstacle no-slip is guaranteed to
-// hold after the projection perturbs near-boundary velocities.
+// Enforces every boundary condition in one pass: no-slip inside the
+// obstacle and no-penetration at its surface, Dirichlet inflow at the left
+// edge, zero-gradient outflow at the right edge, and free-slip tunnel walls
+// at top/bottom. Run twice per step (pre- and post-pressure-projection) so
+// the obstacle conditions hold after the projection perturbs near-boundary
+// velocities.
 void main() {
   vec2 vel = texture(uVelocity, vUv).xy;
-  float solid = texture(uObstacle, vUv).x;
 
   // Left inlet: forced freestream velocity.
   if (vUv.x < uTexel.x * 1.5) {
@@ -34,21 +35,25 @@ void main() {
     vel = vec2(inner.x, 0.0);
   }
 
-  // Obstacle: no-slip. Also lightly damp velocity in cells adjacent to the
-  // obstacle to approximate no-penetration without a full SDF.
-  float solidL = texture(uObstacle, vUv - vec2(uTexel.x, 0.0)).x;
-  float solidR = texture(uObstacle, vUv + vec2(uTexel.x, 0.0)).x;
-  float solidB = texture(uObstacle, vUv - vec2(0.0, uTexel.y)).x;
-  float solidT = texture(uObstacle, vUv + vec2(0.0, uTexel.y)).x;
-  float neighborSolid = max(max(solidL, solidR), max(solidB, solidT));
+  float solid = texture(uObstacle, vUv).x;
+  // (solidL, solidR, solidB, solidT), packed once per geometry change.
+  vec4 nb = texture(uNeighbors, vUv);
+  float neighborSolid = max(max(nb.x, nb.y), max(nb.z, nb.w));
 
-  vel = mix(vel, vec2(0.0), solid);
-  vel = mix(vel, vel * 0.5, neighborSolid * (1.0 - solid));
+  // No-penetration: the mask gradient points into the wall, so strip any
+  // velocity component heading that way while leaving tangential flow
+  // alone (beyond a light no-slip drag), so flow can stay attached.
+  vec2 intoWall = vec2(nb.y - nb.x, nb.w - nb.z);
+  float gradLen = length(intoWall);
+  if (gradLen > 1e-3) {
+    vec2 n = intoWall / gradLen;
+    vel -= max(dot(vel, n), 0.0) * n * min(1.0, neighborSolid * 2.0);
+  }
+  vel *= 1.0 - 0.15 * neighborSolid * (1.0 - solid);
+  vel *= 1.0 - solid;
 
-  // Safety clamp: vorticity confinement can inject more energy than the
-  // (deliberately light, user-tunable) diffusion pass removes, especially
-  // right at the obstacle boundary. Bounding speed prevents that from
-  // compounding into an unbounded blow-up over a long-running session while
+  // Safety clamp: bounds any residual energy injection so a pathological
+  // configuration can't compound into a blow-up over a long session, while
   // leaving normal flow speeds (a few times freestream) unaffected.
   float speed = length(vel);
   if (speed > uMaxSpeed) {

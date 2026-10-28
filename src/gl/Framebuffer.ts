@@ -65,6 +65,17 @@ export class Framebuffer {
       gl.bindTexture(gl.TEXTURE_2D, null);
     }
   }
+
+  /** Fills every texel with a constant (works for float and normalized formats alike). */
+  clear(r = 0, g = 0, b = 0, a = 0): void {
+    this.bind();
+    this.gl.clearBufferfv(this.gl.COLOR, 0, [r, g, b, a]);
+  }
+
+  dispose(): void {
+    this.gl.deleteFramebuffer(this.fbo);
+    this.gl.deleteTexture(this.texture);
+  }
 }
 
 /**
@@ -91,6 +102,16 @@ export class DoubleFBO {
     const tmp = this.read;
     this.read = this.write;
     this.write = tmp;
+  }
+
+  clear(r = 0, g = 0, b = 0, a = 0): void {
+    this.read.clear(r, g, b, a);
+    this.write.clear(r, g, b, a);
+  }
+
+  dispose(): void {
+    this.read.dispose();
+    this.write.dispose();
   }
 }
 

@@ -1,3 +1,25 @@
+import commonGlsl from "./shaders/common.glsl?raw";
+
+/** Per-context `#define`s (e.g. MANUAL_FILTER) injected into every shader, set once by GLContext. */
+const contextDefines = new WeakMap<WebGL2RenderingContext, string[]>();
+
+export function registerShaderDefines(gl: WebGL2RenderingContext, defines: string[]): void {
+  contextDefines.set(gl, defines);
+}
+
+/**
+ * Splices the shared prelude (precision, `sampleLinear`) and any defines in
+ * right after the mandatory `#version` line, so individual shader files stay
+ * standalone-readable but can rely on the common helpers.
+ */
+function withPrelude(gl: WebGL2RenderingContext, source: string, extraDefines: string[]): string {
+  const nl = source.indexOf("\n");
+  const version = source.slice(0, nl);
+  const body = source.slice(nl + 1);
+  const defines = [...(contextDefines.get(gl) ?? []), ...extraDefines].map((d) => `#define ${d}`).join("\n");
+  return `${version}\n${defines}\n${commonGlsl}\n${body}`;
+}
+
 function compile(gl: WebGL2RenderingContext, type: number, source: string): WebGLShader {
   const shader = gl.createShader(type);
   if (!shader) throw new Error("Failed to create shader");
@@ -15,6 +37,8 @@ function compile(gl: WebGL2RenderingContext, type: number, source: string): WebG
 export interface ShaderOptions {
   /** Varyings to capture via transform feedback (particle update programs). */
   transformFeedbackVaryings?: string[];
+  /** Extra `#define`s for this program only. */
+  defines?: string[];
 }
 
 export class Shader {
@@ -24,8 +48,9 @@ export class Shader {
 
   constructor(gl: WebGL2RenderingContext, vertSrc: string, fragSrc: string, options: ShaderOptions = {}) {
     this.gl = gl;
-    const vert = compile(gl, gl.VERTEX_SHADER, vertSrc);
-    const frag = compile(gl, gl.FRAGMENT_SHADER, fragSrc);
+    const defines = options.defines ?? [];
+    const vert = compile(gl, gl.VERTEX_SHADER, withPrelude(gl, vertSrc, defines));
+    const frag = compile(gl, gl.FRAGMENT_SHADER, withPrelude(gl, fragSrc, defines));
     const program = gl.createProgram();
     if (!program) throw new Error("Failed to create program");
     gl.attachShader(program, vert);

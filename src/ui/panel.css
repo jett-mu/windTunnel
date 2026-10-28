@@ -20,12 +20,12 @@
 }
 
 .panel {
-  position: absolute;
-  top: 0;
-  right: 0;
+  position: relative;
+  flex: 0 0 300px;
   width: 300px;
   height: 100%;
   overflow-y: auto;
+  overscroll-behavior: contain;
   background: var(--paper-raised);
   border-left: 1px solid var(--rule-strong);
   padding: 20px 16px 32px;
@@ -42,7 +42,30 @@
   letter-spacing: -0.005em;
   text-transform: uppercase;
   color: var(--ink);
-  margin: 0 0 14px;
+  margin: 0;
+}
+
+.panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 12px;
+}
+
+#app.panel-hidden .panel {
+  display: none;
+}
+
+.panel-show {
+  display: none;
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  z-index: 10;
+}
+
+#app.panel-hidden .panel-show {
+  display: block;
 }
 
 .panel h2 {
@@ -149,6 +172,16 @@
   background: var(--signal);
 }
 
+.slider-row input[type="range"]:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.slider-row input[type="range"]:focus-visible {
+  outline: 2px solid var(--signal);
+  outline-offset: 6px;
+}
+
 .graph-wrap {
   background: var(--paper-raised);
   border: 1px solid var(--rule-strong);
@@ -166,7 +199,8 @@
 
 .graph-legend {
   display: flex;
-  gap: 14px;
+  gap: 10px;
+  white-space: nowrap;
   font-family: var(--font-data);
   font-size: 10px;
   letter-spacing: 0.06em;
@@ -297,4 +331,351 @@
   z-index: 10;
   letter-spacing: 0.03em;
   white-space: pre;
+  pointer-events: none;
+}
+
+/* ---- Toolbar and buttons ---------------------------------------------- */
+
+.toolbar {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+
+.toolbar-spacer {
+  flex: 1;
+}
+
+.tool-button,
+.stage-button,
+.segmented button {
+  font-family: var(--font-data);
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  background: var(--paper-raised);
+  border: 1px solid var(--rule-strong);
+  color: var(--ink);
+  border-radius: var(--radius);
+  padding: 6px 9px;
+  cursor: pointer;
+  transition: background 0.1s, color 0.1s, border-color 0.1s;
+}
+
+.tool-button:hover,
+.stage-button:hover,
+.segmented button:hover {
+  background: var(--paper-sunken);
+  border-color: var(--ink-3);
+}
+
+.tool-button:focus-visible,
+.stage-button:focus-visible,
+.segmented button:focus-visible,
+.select:focus-visible,
+.code-row input:focus-visible,
+.num-field input:focus-visible {
+  outline: 2px solid var(--signal);
+  outline-offset: 1px;
+}
+
+.tool-button:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.tool-button.ghost {
+  border-color: transparent;
+  color: var(--ink-3);
+}
+
+.tool-button.primary {
+  background: var(--ink);
+  border-color: var(--ink);
+  color: var(--paper-raised);
+}
+
+.tool-button.primary:hover {
+  background: #2c2f33;
+}
+
+.tool-button.primary.danger {
+  background: var(--signal);
+  border-color: var(--signal);
+}
+
+.graph-actions {
+  display: flex;
+  gap: 4px;
+}
+
+/* ---- Segmented controls, selects, text inputs ------------------------- */
+
+.segment-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 12px;
+  color: var(--ink-2);
+  font-weight: 500;
+}
+
+.segmented {
+  display: flex;
+}
+
+.segmented button {
+  border-radius: 0;
+  margin-left: -1px;
+  color: var(--ink-2);
+  padding: 5px 8px;
+}
+
+.segmented button:first-child {
+  border-radius: var(--radius) 0 0 var(--radius);
+  margin-left: 0;
+}
+
+.segmented button:last-child {
+  border-radius: 0 var(--radius) var(--radius) 0;
+}
+
+.segmented button.active {
+  position: relative;
+  background: var(--ink);
+  border-color: var(--ink);
+  color: var(--paper-raised);
+}
+
+.select {
+  width: 100%;
+  font-family: var(--font-ui);
+  font-size: 15px;
+  font-weight: 500;
+  color: var(--ink);
+  background: var(--paper-raised);
+  border: 1px solid var(--rule-strong);
+  border-radius: var(--radius);
+  padding: 6px 8px;
+  margin-bottom: 12px;
+}
+
+.code-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 14px;
+  color: var(--ink-2);
+  font-weight: 500;
+}
+
+.code-row input,
+.num-field input {
+  font-family: var(--font-data);
+  font-size: 13px;
+  color: var(--ink);
+  background: var(--paper);
+  border: 1px solid var(--rule-strong);
+  border-radius: var(--radius);
+  padding: 5px 8px;
+  width: 100%;
+  min-width: 0;
+}
+
+.code-row input {
+  flex: 1;
+  letter-spacing: 0.2em;
+}
+
+.code-row input.invalid {
+  border-color: var(--signal);
+  background: var(--signal-wash);
+}
+
+/* ---- Polar sweep ------------------------------------------------------ */
+
+.sweep {
+  background: var(--paper-raised);
+  border: 1px solid var(--rule-strong);
+  border-radius: var(--radius);
+  padding: 10px;
+}
+
+.sweep-grid {
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  gap: 6px;
+  margin-bottom: 10px;
+}
+
+.num-field {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.num-field span {
+  font-family: var(--font-data);
+  font-size: 8px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+  white-space: nowrap;
+}
+
+.num-field input {
+  font-size: 11px;
+  padding: 4px 4px;
+}
+
+.sweep-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.progress {
+  flex: 1;
+  height: 4px;
+  background: var(--paper-sunken);
+  border-radius: 2px;
+  overflow: hidden;
+}
+
+.progress-fill {
+  height: 100%;
+  width: 0;
+  background: var(--signal);
+  transition: width 0.2s;
+}
+
+.sweep-status {
+  font-family: var(--font-data);
+  font-size: 9px;
+  color: var(--ink-2);
+  min-height: 12px;
+  margin: 8px 0 6px;
+  font-variant-numeric: tabular-nums;
+}
+
+.polar-tabs {
+  margin-bottom: 6px;
+}
+
+.polar-tabs button {
+  flex: 1;
+}
+
+.polar-canvas-wrap {
+  height: 140px;
+}
+
+/* ---- Footer ----------------------------------------------------------- */
+
+.shortcuts {
+  margin-top: 24px;
+  padding-top: 12px;
+  border-top: 1px solid var(--rule);
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 12px;
+  font-family: var(--font-data);
+  font-size: 9px;
+  color: var(--ink-3);
+  letter-spacing: 0.04em;
+}
+
+.shortcuts kbd {
+  font-family: var(--font-data);
+  font-size: 9px;
+  color: var(--ink);
+  background: var(--paper);
+  border: 1px solid var(--rule-strong);
+  border-bottom-width: 2px;
+  border-radius: 2px;
+  padding: 1px 4px;
+}
+
+.shortcuts p {
+  flex-basis: 100%;
+  margin: 4px 0 0;
+  font-family: var(--font-ui);
+  font-size: 13px;
+  line-height: 1.35;
+  letter-spacing: 0;
+  color: var(--ink-2);
+}
+
+/* ---- Stage overlays --------------------------------------------------- */
+
+.status-badge {
+  position: absolute;
+  top: 12px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: var(--signal);
+  color: var(--paper-raised);
+  font-family: var(--font-data);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  padding: 5px 12px;
+  border-radius: var(--radius);
+  z-index: 10;
+  pointer-events: none;
+}
+
+.status-badge[hidden] {
+  display: none;
+}
+
+.message-card {
+  margin: auto;
+  max-width: 420px;
+  background: var(--paper-raised);
+  border: 1px solid var(--rule-strong);
+  border-radius: var(--radius);
+  padding: 24px;
+  color: var(--ink);
+  font-family: var(--font-ui);
+  font-size: 16px;
+  line-height: 1.45;
+}
+
+.message-card h1 {
+  font-size: 22px;
+  font-weight: 600;
+  text-transform: uppercase;
+  margin: 0 0 10px;
+}
+
+.message-card p {
+  margin: 0 0 16px;
+  color: var(--ink-2);
+}
+
+/* ---- Narrow screens: panel becomes a scrolling sheet below the stage --- */
+
+@media (max-width: 720px) {
+  .panel {
+    flex: 1 1 auto;
+    width: 100%;
+    border-left: none;
+    border-top: 1px solid var(--rule-strong);
+  }
+
+  .fps-badge {
+    top: 8px;
+    left: 8px;
+    padding: 3px 7px;
+    font-size: 10px;
+  }
+
+  .panel-show {
+    top: 8px;
+    right: 8px;
+  }
 }

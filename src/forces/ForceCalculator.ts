@@ -3,66 +3,118 @@ import { Shader } from "../gl/Shader";
 import { Framebuffer, makeFormats } from "../gl/Framebuffer";
 import { FullscreenQuad } from "../gl/FullscreenQuad";
 import { Airfoil } from "../airfoil/Airfoil";
+import type { SurfaceSample } from "../airfoil/Airfoil";
+import { pivotFrac } from "../airfoil/Shapes";
+import type { Vec2 } from "../gl/math";
 import { GRID_W, GRID_H } from "../solver/SolverParams";
 
 import passthroughVert from "../solver/shaders/passthrough.vert?raw";
 import sampleSurfaceFrag from "./shaders/sampleSurface.frag?raw";
 
 export interface ForceResult {
+  /** Dimensional forces (density-scaled). */
   lift: number;
   drag: number;
   cl: number;
   cd: number;
+  /** Pitching moment coefficient about the pitch axis, nose-up positive. */
+  cm: number;
+  /** Lift-to-drag ratio; NaN when drag is ~0. */
+  ld: number;
+  /** Center of pressure as a fraction of chord from the leading edge, or null when undefined. */
+  xcp: number | null;
   reynolds: number;
   dynamicPressure: number;
 }
 
-const THROTTLE_FRAMES = 3;
+export const ZERO_FORCES: ForceResult = {
+  lift: 0,
+  drag: 0,
+  cl: 0,
+  cd: 0,
+  cm: 0,
+  ld: NaN,
+  xcp: null,
+  reynolds: 0,
+  dynamicPressure: 0,
+};
+
+export interface FlowConditions {
+  airspeed: number;
+  density: number;
+  viscosity: number;
+  dt: number;
+}
+
 /** Offset the sample point outward from the surface by this many grid cells,
  * so we read fluid-side pressure rather than the (mirrored) interior value. */
 const SAMPLE_OFFSET_CELLS = 1.5;
+/** Readbacks in flight; a slot frees once the GPU signals its fence. */
+const PBO_COUNT = 3;
+
+/** Everything needed to turn a readback into forces, captured when it was issued. */
+interface Snapshot {
+  samples: SurfaceSample[];
+  pivot: Vec2;
+  refLength: number;
+  chord: number;
+  pivotFrac: number;
+  hasChord: boolean;
+  aoaRad: number;
+  flow: FlowConditions;
+}
+
+interface Pending {
+  pbo: WebGLBuffer;
+  sync: WebGLSync;
+  snapshot: Snapshot;
+}
 
 /**
- * Computes lift/drag by integrating pressure over the airfoil's surface
+ * Computes lift/drag/moment by integrating pressure over the body's surface
  * polyline. Grid textures alone have no notion of "surface", so the airfoil
  * keeps an explicit JS-side polygon with per-segment outward normals
  * (`Airfoil.getSurfaceSamples()`); this class batches all of those samples'
- * pressure lookups into one small GPU pass + one readback per update, rather
- * than one `readPixels` per point (which would stall the GPU pipeline).
+ * pressure lookups into one small GPU pass. The readback goes through a
+ * pixel-pack buffer guarded by a fence and is only mapped once the GPU has
+ * finished, a frame or two later, so it never stalls the pipeline the way a
+ * synchronous `readPixels` would.
  */
 export class ForceCalculator {
   private gl: WebGL2RenderingContext;
   private quad: FullscreenQuad;
   private shader: Shader;
-
-  private sampleTarget: Framebuffer;
-  private sampleUVTexture: WebGLTexture;
-  private numSamples: number;
-  private lastAirfoilVersion = -1;
-  private frameCounter = 0;
-  private readbackBuffer: Float32Array;
-
-  private latest: ForceResult = { lift: 0, drag: 0, cl: 0, cd: 0, reynolds: 0, dynamicPressure: 0 };
   private airfoil: Airfoil;
+
+  private capacity = 0;
+  private sampleTarget!: Framebuffer;
+  private sampleUVTexture: WebGLTexture | null = null;
+  private freePbos: WebGLBuffer[] = [];
+  private pending: Pending[] = [];
+  private readbackBuffer = new Float32Array(0);
+  private lastAirfoilVersion = -1;
+
+  private latest: ForceResult = ZERO_FORCES;
 
   constructor(glCtx: GLContext, airfoil: Airfoil) {
     this.airfoil = airfoil;
-    const gl = glCtx.gl;
-    this.gl = gl;
-    this.quad = new FullscreenQuad(gl);
-    this.shader = new Shader(gl, passthroughVert, sampleSurfaceFrag);
-
-    this.numSamples = airfoil.getSurfaceSamples().length;
-    const fmt = makeFormats(gl);
-    this.sampleTarget = new Framebuffer(gl, this.numSamples, 1, fmt.RGBA32F, gl.NEAREST);
-    this.sampleUVTexture = this.createSampleUVTexture();
-    this.readbackBuffer = new Float32Array(this.numSamples * 4);
-
-    this.uploadSampleUVs();
+    this.gl = glCtx.gl;
+    this.quad = new FullscreenQuad(this.gl);
+    this.shader = new Shader(this.gl, passthroughVert, sampleSurfaceFrag);
   }
 
-  private createSampleUVTexture(): WebGLTexture {
+  /** (Re)allocates the sample target, UV texture and readback buffers for `n` samples. */
+  private allocate(n: number): void {
     const gl = this.gl;
+    this.flushPending();
+    if (this.capacity > 0) {
+      this.sampleTarget.dispose();
+      gl.deleteTexture(this.sampleUVTexture);
+      this.freePbos.forEach((b) => gl.deleteBuffer(b));
+    }
+    this.capacity = n;
+    this.sampleTarget = new Framebuffer(gl, n, 1, makeFormats(gl).RGBA32F, gl.NEAREST);
+
     const tex = gl.createTexture();
     if (!tex) throw new Error("Failed to create sample-UV texture");
     gl.bindTexture(gl.TEXTURE_2D, tex);
@@ -70,24 +122,44 @@ export class ForceCalculator {
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
-    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RG32F, this.numSamples, 1, 0, gl.RG, gl.FLOAT, null);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RG32F, n, 1, 0, gl.RG, gl.FLOAT, null);
     gl.bindTexture(gl.TEXTURE_2D, null);
-    return tex;
+    this.sampleUVTexture = tex;
+
+    this.freePbos = [];
+    for (let i = 0; i < PBO_COUNT; i++) {
+      const pbo = gl.createBuffer();
+      if (!pbo) throw new Error("Failed to create readback buffer");
+      gl.bindBuffer(gl.PIXEL_PACK_BUFFER, pbo);
+      // Usage is only a hint. Not *_READ: Chrome shadow-copies READ-usage
+      // buffers at every fenceSync for a mapping path WebGL never uses, then
+      // logs a performance warning each time the buffer is rewritten.
+      gl.bufferData(gl.PIXEL_PACK_BUFFER, n * 16, gl.DYNAMIC_COPY);
+      this.freePbos.push(pbo);
+    }
+    gl.bindBuffer(gl.PIXEL_PACK_BUFFER, null);
+    this.readbackBuffer = new Float32Array(n * 4);
   }
 
-  private uploadSampleUVs(): void {
+  /** Abandons in-flight readbacks (geometry storage is about to be replaced). */
+  private flushPending(): void {
+    for (const p of this.pending) {
+      this.gl.deleteSync(p.sync);
+      this.freePbos.push(p.pbo);
+    }
+    this.pending = [];
+  }
+
+  private uploadSampleUVs(samples: SurfaceSample[]): void {
     const gl = this.gl;
-    const samples = this.airfoil.getSurfaceSamples();
-    const data = new Float32Array(this.numSamples * 2);
-    for (let i = 0; i < this.numSamples && i < samples.length; i++) {
+    const data = new Float32Array(this.capacity * 2);
+    for (let i = 0; i < samples.length; i++) {
       const s = samples[i];
-      const sx = s.point.x + s.normal.x * SAMPLE_OFFSET_CELLS;
-      const sy = s.point.y + s.normal.y * SAMPLE_OFFSET_CELLS;
-      data[i * 2 + 0] = sx / GRID_W;
-      data[i * 2 + 1] = sy / GRID_H;
+      data[i * 2 + 0] = (s.point.x + s.normal.x * SAMPLE_OFFSET_CELLS) / GRID_W;
+      data[i * 2 + 1] = (s.point.y + s.normal.y * SAMPLE_OFFSET_CELLS) / GRID_H;
     }
     gl.bindTexture(gl.TEXTURE_2D, this.sampleUVTexture);
-    gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, this.numSamples, 1, gl.RG, gl.FLOAT, data);
+    gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, this.capacity, 1, gl.RG, gl.FLOAT, data);
     gl.bindTexture(gl.TEXTURE_2D, null);
   }
 
@@ -95,47 +167,124 @@ export class ForceCalculator {
     return this.latest;
   }
 
-  update(pressureTexture: WebGLTexture, airspeed: number, density: number, viscosity: number): void {
-    this.frameCounter++;
-    if (this.frameCounter % THROTTLE_FRAMES !== 0) return;
+  /** Clears the last result (e.g. after a flow reset) and abandons in-flight readbacks. */
+  reset(): void {
+    this.flushPending();
+    this.latest = ZERO_FORCES;
+  }
+
+  /**
+   * Collects any finished readback, then (if `issue`, i.e. the flow
+   * actually advanced) starts a new one. Returns true when
+   * `getLatestForces()` holds a result it didn't before this call.
+   */
+  update(pressureTexture: WebGLTexture, flow: FlowConditions, issue: boolean): boolean {
+    const gl = this.gl;
+    let fresh = false;
+    while (this.pending.length > 0) {
+      const head = this.pending[0];
+      if (gl.clientWaitSync(head.sync, 0, 0) === gl.TIMEOUT_EXPIRED) break;
+      this.pending.shift();
+      gl.deleteSync(head.sync);
+      gl.bindBuffer(gl.PIXEL_PACK_BUFFER, head.pbo);
+      gl.getBufferSubData(gl.PIXEL_PACK_BUFFER, 0, this.readbackBuffer);
+      gl.bindBuffer(gl.PIXEL_PACK_BUFFER, null);
+      this.freePbos.push(head.pbo);
+      this.latest = this.integrate(this.readbackBuffer, head.snapshot);
+      fresh = true;
+    }
+
+    if (!issue) return fresh;
+    const samples = this.airfoil.getSurfaceSamples();
+    if (samples.length > this.capacity) {
+      this.allocate(Math.ceil(samples.length * 1.25));
+      this.lastAirfoilVersion = -1;
+    }
+    if (this.freePbos.length === 0) return fresh;
 
     if (this.airfoil.version !== this.lastAirfoilVersion) {
       this.lastAirfoilVersion = this.airfoil.version;
-      this.uploadSampleUVs();
+      this.uploadSampleUVs(samples);
     }
 
-    const gl = this.gl;
     this.sampleTarget.bind();
     this.shader.use();
     this.shader.setTexture(0, "uSampleUV", this.sampleUVTexture);
     this.shader.setTexture(1, "uPressure", pressureTexture);
     this.quad.draw();
 
-    gl.readPixels(0, 0, this.numSamples, 1, gl.RGBA, gl.FLOAT, this.readbackBuffer);
+    const pbo = this.freePbos.pop()!;
+    gl.bindBuffer(gl.PIXEL_PACK_BUFFER, pbo);
+    gl.readPixels(0, 0, this.capacity, 1, gl.RGBA, gl.FLOAT, 0);
+    gl.bindBuffer(gl.PIXEL_PACK_BUFFER, null);
+    const sync = gl.fenceSync(gl.SYNC_GPU_COMMANDS_COMPLETE, 0);
+    if (!sync) {
+      this.freePbos.push(pbo);
+      return fresh;
+    }
+    const shape = this.airfoil.params.shape;
+    this.pending.push({
+      pbo,
+      sync,
+      snapshot: {
+        samples,
+        pivot: this.airfoil.getPivotWorld(),
+        refLength: this.airfoil.getReferenceLength(),
+        chord: this.airfoil.getChordLength(),
+        pivotFrac: pivotFrac(shape),
+        hasChord: shape === "naca" || shape === "plate",
+        aoaRad: (this.airfoil.params.aoaDeg * Math.PI) / 180,
+        flow: { ...flow },
+      },
+    });
+    return fresh;
+  }
 
-    const samples = this.airfoil.getSurfaceSamples();
+  private integrate(pressures: Float32Array, snap: Snapshot): ForceResult {
+    // The solver's pressure is the projection potential (u -= grad p per
+    // step), i.e. physical pressure * dt / density. Integrate in solver
+    // units, then convert once.
     let fx = 0;
     let fy = 0;
-    for (let i = 0; i < this.numSamples && i < samples.length; i++) {
-      const p = this.readbackBuffer[i * 4];
-      const s = samples[i];
+    let mz = 0;
+    for (let i = 0; i < snap.samples.length; i++) {
+      const p = pressures[i * 4];
+      const s = snap.samples[i];
       // Surface pressure integration: pressure pushes inward, so the force
       // contribution on the body is -p * n * segment_length.
-      fx += -p * s.normal.x * s.length;
-      fy += -p * s.normal.y * s.length;
+      const sx = -p * s.normal.x * s.length;
+      const sy = -p * s.normal.y * s.length;
+      fx += sx;
+      fy += sy;
+      // Counter-clockwise (z) moment about the pitch axis.
+      mz += (s.point.x - snap.pivot.x) * sy - (s.point.y - snap.pivot.y) * sx;
     }
 
-    const drag = fx; // component along freestream (+x)
-    // World +y is "up" (toward the airfoil's upper/suction surface — see
-    // NACA.ts, which adds +yt*cos(theta) for the upper surface), so lift is
-    // the +y component directly, no sign flip needed.
-    const lift = fy;
-    const chord = this.airfoil.getChordLength();
+    const { airspeed, density, viscosity, dt } = snap.flow;
+    const toPhysical = density / dt;
+    // Drag is the component along the freestream (+x); world +y is "up",
+    // toward the airfoil's upper/suction surface, so lift is +y directly.
+    const drag = fx * toPhysical;
+    const lift = fy * toPhysical;
+    const L = snap.refLength;
     const q = 0.5 * density * airspeed * airspeed;
-    const cl = q * chord > 1e-6 ? lift / (q * chord) : 0;
-    const cd = q * chord > 1e-6 ? drag / (q * chord) : 0;
-    const reynolds = viscosity > 1e-6 ? (airspeed * chord) / viscosity : 0;
+    // Coefficients in solver units directly, so density cancels exactly.
+    const qSolver = 0.5 * airspeed * airspeed * dt;
+    const valid = qSolver * L > 1e-9;
+    const cl = valid ? fy / (qSolver * L) : 0;
+    const cd = valid ? fx / (qSolver * L) : 0;
+    // Nose-up is clockwise in this y-up frame, hence the sign flip.
+    const cm = valid ? -mz / (qSolver * L * L) : 0;
+    const ld = Math.abs(cd) > 1e-4 ? cl / cd : NaN;
 
-    this.latest = { lift, drag, cl, cd, reynolds, dynamicPressure: q };
+    // Center of pressure along the chord from the normal-force coefficient.
+    let xcp: number | null = null;
+    if (snap.hasChord) {
+      const cn = cl * Math.cos(snap.aoaRad) + cd * Math.sin(snap.aoaRad);
+      if (Math.abs(cn) > 0.05) xcp = snap.pivotFrac - (cm * L) / (cn * snap.chord);
+    }
+
+    const reynolds = viscosity > 1e-6 ? (airspeed * L) / viscosity : 0;
+    return { lift, drag, cl, cd, cm, ld, xcp, reynolds, dynamicPressure: q };
   }
 }

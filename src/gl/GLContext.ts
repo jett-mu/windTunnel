@@ -1,3 +1,5 @@
+import { registerShaderDefines } from "./Shader";
+
 export interface GLCapabilities {
   colorBufferFloat: boolean;
   linearFloatFilter: boolean;
@@ -34,13 +36,16 @@ export class GLContext {
     const linearFloatFilter = !!gl.getExtension("OES_texture_float_linear");
 
     this.caps = { colorBufferFloat, linearFloatFilter };
+    registerShaderDefines(gl, linearFloatFilter ? [] : ["MANUAL_FILTER"]);
+  }
 
-    // eslint-disable-next-line no-console
-    console.log("[GLContext] WebGL2 ready. Capabilities:", this.caps);
+  /** Device-pixel ratio used for the backing store, capped to bound fill cost on dense displays. */
+  static dpr(): number {
+    return Math.min(window.devicePixelRatio || 1, 2);
   }
 
   resize(width: number, height: number): void {
-    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    const dpr = GLContext.dpr();
     const w = Math.max(1, Math.round(width * dpr));
     const h = Math.max(1, Math.round(height * dpr));
     if (this.canvas.width !== w || this.canvas.height !== h) {

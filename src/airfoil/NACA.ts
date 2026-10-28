@@ -50,6 +50,27 @@ export interface NACAGeometry {
   polygon: Vec2[];
 }
 
+/** Formats params as the 4-digit designation, e.g. 2412. Fractional values round. */
+export function formatNACA4(maxCamberPct: number, camberPosTenths: number, thicknessPct: number): string {
+  const m = Math.round(maxCamberPct);
+  const p = m === 0 ? 0 : Math.round(camberPosTenths);
+  const t = Math.round(thicknessPct);
+  return `${m}${p}${String(t).padStart(2, "0")}`;
+}
+
+/** Parses a 4-digit designation ("2412", "NACA 0012"); null if malformed. */
+export function parseNACA4(code: string): { maxCamberPct: number; camberPosTenths: number; thicknessPct: number } | null {
+  const match = /^\s*(?:naca\s*)?(\d)(\d)(\d{2})\s*$/i.exec(code);
+  if (!match) return null;
+  const maxCamberPct = Number(match[1]);
+  const camberPosTenths = Number(match[2]);
+  const thicknessPct = Number(match[3]);
+  if (thicknessPct === 0) return null;
+  // A cambered section needs a camber position; "2012" is meaningless.
+  if (maxCamberPct > 0 && camberPosTenths === 0) return null;
+  return { maxCamberPct, camberPosTenths: camberPosTenths || 4, thicknessPct };
+}
+
 function thicknessAt(xc: number, t: number, chord: number): number {
   const r = xc / chord;
   return (
