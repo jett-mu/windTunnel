@@ -27,6 +27,7 @@ export const RANGES = {
   airspeed: r(10, 400, 1),
   density: r(0.1, 3, 0.05),
   viscosity: r(0.01, 2, 0.01),
+  vorticityEpsilon: r(0, 1.5, 0.05),
   tickRate: r(TICK_RATE_MIN, TICK_RATE_MAX, 1),
   particleCount: r(1000, 50000, 1000),
   trailLength: r(0.8, 0.99, 0.005),

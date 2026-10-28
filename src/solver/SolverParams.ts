@@ -4,7 +4,9 @@ export const GRID_H = 256;
 
 /** "multigrid" (default) or "jacobi" (the v1 solver, selectable with `?solver=jacobi` for A/B comparison). */
 export type PressureSolver = "multigrid" | "jacobi";
-export const MULTIGRID_CYCLES = 1;
+/** Two fused V-cycles per step cost what one unfused cycle used to and leave
+ * ~7x less residual (relative ~1e-2 vs ~5e-2). */
+export const MULTIGRID_CYCLES = 2;
 export const JACOBI_ITERATIONS = 80;
 /** Velocity safety clamp, as a multiple of freestream speed. */
 export const MAX_SPEED_FACTOR = 6;
@@ -22,7 +24,10 @@ export interface SolverParams {
   density: number;
   /** Kinematic viscosity, used both in diffusion and Re = V*c/nu. */
   viscosity: number;
-  /** Vorticity confinement strength. */
+  /** Vorticity confinement strength: artificial energy injected to offset
+   * numerical diffusion of small vortices. Kept low by default, since the
+   * MacCormack + RK2 advection already preserves the wake; 0 is the
+   * physically "pure" setting. */
   vorticityEpsilon: number;
   /** Simulation timestep, seconds. Held fixed regardless of tick rate — see
    * `tickRate` for how simulation speed is actually controlled. */
@@ -46,7 +51,7 @@ export const DEFAULT_SOLVER_PARAMS: SolverParams = {
   airspeed: 120,
   density: 1.0,
   viscosity: 0.4,
-  vorticityEpsilon: 0.4,
+  vorticityEpsilon: 0.15,
   dt: 1 / 60,
   tickRate: 1,
   particleCount: 20000,

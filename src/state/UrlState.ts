@@ -33,6 +33,7 @@ const NUM_FIELDS: NumField[] = [
   num("spd", RANGES.airspeed, (s) => s.solver.airspeed, (s, v) => (s.solver.airspeed = v)),
   num("rho", RANGES.density, (s) => s.solver.density, (s, v) => (s.solver.density = v)),
   num("nu", RANGES.viscosity, (s) => s.solver.viscosity, (s, v) => (s.solver.viscosity = v)),
+  num("vc", RANGES.vorticityEpsilon, (s) => s.solver.vorticityEpsilon, (s, v) => (s.solver.vorticityEpsilon = v)),
   num("tick", RANGES.tickRate, (s) => s.solver.tickRate, (s, v) => (s.solver.tickRate = Math.round(v))),
   num("n", RANGES.particleCount, (s) => s.solver.particleCount, (s, v) => (s.solver.particleCount = Math.round(v))),
   num("trail", RANGES.trailLength, (s) => s.solver.trailLength, (s, v) => (s.solver.trailLength = v)),

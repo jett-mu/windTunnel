@@ -1,8 +1,6 @@
 interface PendingQuery {
   label: string;
   query: WebGLQuery;
-  /** Reported time is divided by this (e.g. steps per frame, for ms/step). */
-  divisor: number;
 }
 
 /**
@@ -31,13 +29,12 @@ export class GpuTimer {
     const query = this.gl.createQuery();
     if (!query) return;
     this.gl.beginQuery(this.ext.TIME_ELAPSED_EXT, query);
-    this.active = { label, query, divisor: 1 };
+    this.active = { label, query };
   }
 
-  end(divisor = 1): void {
+  end(): void {
     if (!this.ext || !this.active) return;
     this.gl.endQuery(this.ext.TIME_ELAPSED_EXT);
-    this.active.divisor = Math.max(divisor, 1);
     this.pending.push(this.active);
     this.active = null;
   }
@@ -52,7 +49,7 @@ export class GpuTimer {
       if (!gl.getQueryParameter(head.query, gl.QUERY_RESULT_AVAILABLE)) break;
       this.pending.shift();
       if (!disjoint) {
-        const ms = gl.getQueryParameter(head.query, gl.QUERY_RESULT) / 1e6 / head.divisor;
+        const ms = gl.getQueryParameter(head.query, gl.QUERY_RESULT) / 1e6;
         const prev = this.results.get(head.label);
         this.results.set(head.label, prev === undefined ? ms : prev + (ms - prev) * 0.1);
       }

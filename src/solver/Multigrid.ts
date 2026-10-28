@@ -6,17 +6,18 @@ import passthroughVert from "./shaders/passthrough.vert?raw";
 import jacobiFrag from "./shaders/jacobi.frag?raw";
 import residualFrag from "./shaders/residual.frag?raw";
 import restrictFrag from "./shaders/restrict.frag?raw";
-import prolongFrag from "./shaders/prolong.frag?raw";
+import restrictResidualFrag from "./shaders/restrictResidual.frag?raw";
+import coarseSolveFrag from "./shaders/coarseSolve.frag?raw";
 import obstacleNeighborsFrag from "./shaders/obstacleNeighbors.frag?raw";
 
-/** Smallest level's height in cells; 256 -> 4 gives a 7-level hierarchy. */
+/** Smallest level's height in cells; 256 -> 4 gives a 7-level hierarchy whose
+ * 8x4 coarsest grid is solved directly in one pass (see coarseSolve.frag). */
 const COARSEST_H = 4;
+/** Smoothing passes, each a red-black Gauss-Seidel half-sweep (one full
+ * sweep = 2 passes). Gauss-Seidel damps the high-frequency error smoothing
+ * is for much faster than (damped) Jacobi, at identical cost per pass. */
 const PRE_SMOOTH = 2;
 const POST_SMOOTH = 2;
-const COARSEST_ITERATIONS = 16;
-/** Damped Jacobi weight for the smoothers: plain Jacobi barely damps the
- * highest-frequency (checkerboard) error mode, which is the one smoothing is for. */
-const SMOOTH_OMEGA = 0.8;
 
 interface Level {
   w: number;
@@ -26,7 +27,6 @@ interface Level {
   h2: number;
   x: DoubleFBO;
   rhs: Framebuffer;
-  residual: Framebuffer;
   /** Coarse levels own a downsampled obstacle; level 0 uses the caller's mask texture. */
   obstacleFbo: Framebuffer | null;
   obstacle: WebGLTexture | null;
@@ -48,7 +48,10 @@ export class Multigrid {
   private jacobiShader: Shader;
   private residualShader: Shader;
   private restrictShader: Shader;
-  private prolongShader: Shader;
+  private restrictResidualShader: Shader;
+  private coarseSolveShader: Shader;
+  /** Debug-only scratch target for `measureResidual`. */
+  private debugResidual: Framebuffer;
   private neighborsShader: Shader;
 
   constructor(
@@ -73,7 +76,6 @@ export class Multigrid {
         h2: spacing * spacing,
         x: isFine ? fine.pressure : new DoubleFBO(gl, w, h, fmt.R32F, filter),
         rhs: isFine ? fine.rhs : new Framebuffer(gl, w, h, fmt.R32F, filter),
-        residual: new Framebuffer(gl, w, h, fmt.R32F, gl.NEAREST),
         obstacleFbo,
         obstacle: obstacleFbo ? obstacleFbo.texture : null,
         neighbors: new Framebuffer(gl, w, h, fmt.RGBA8, gl.NEAREST),
@@ -87,7 +89,12 @@ export class Multigrid {
     this.jacobiShader = new Shader(gl, passthroughVert, jacobiFrag);
     this.residualShader = new Shader(gl, passthroughVert, residualFrag);
     this.restrictShader = new Shader(gl, passthroughVert, restrictFrag);
-    this.prolongShader = new Shader(gl, passthroughVert, prolongFrag);
+    this.restrictResidualShader = new Shader(gl, passthroughVert, restrictResidualFrag);
+    const coarsest = this.levels[this.levels.length - 1];
+    this.coarseSolveShader = new Shader(gl, passthroughVert, coarseSolveFrag, {
+      defines: [`COARSE_W ${coarsest.w}`, `COARSE_H ${coarsest.h}`],
+    });
+    this.debugResidual = new Framebuffer(gl, fine.w, fine.h, fmt.R32F, gl.NEAREST);
     this.neighborsShader = new Shader(gl, passthroughVert, obstacleNeighborsFrag);
   }
 
@@ -120,11 +127,20 @@ export class Multigrid {
    */
   measureResidual(gl: WebGL2RenderingContext): number {
     const level = this.levels[0];
-    this.computeResidual(level);
+    this.debugResidual.bind();
+    const rs = this.residualShader;
+    rs.use();
+    rs.setTexture(0, "uPressure", level.x.read.texture);
+    rs.setTexture(1, "uRhs", level.rhs.texture);
+    rs.setTexture(2, "uNeighbors", level.neighbors.texture);
+    rs.setTexture(3, "uObstacle", level.obstacle);
+    rs.setVec2("uTexel", level.texel[0], level.texel[1]);
+    rs.setFloat("uH2", level.h2);
+    this.quad.draw();
     const n = level.w * level.h;
     const r = new Float32Array(n * 4);
     gl.readPixels(0, 0, level.w, level.h, gl.RGBA, gl.FLOAT, r);
-    level.rhs.bind();
+    level.rhs.bind(true); // read-only: keep contents
     const b = new Float32Array(n * 4);
     gl.readPixels(0, 0, level.w, level.h, gl.RGBA, gl.FLOAT, b);
     let rr = 0;
@@ -143,65 +159,75 @@ export class Multigrid {
 
   /** Plain fine-grid Jacobi, kept for A/B comparison against the V-cycle. */
   jacobi(iterations: number): void {
-    this.smooth(this.levels[0], iterations, 1.0);
+    this.smooth(this.levels[0], iterations, false);
   }
 
+  /**
+   * One V-cycle from `index` down. Coarse levels solve for the error with a
+   * zero initial guess; the fine level is warm-started from the previous
+   * step. Clearing, residual/restriction and prolongation/correction are all
+   * fused into neighboring passes, since on the small levels the fixed cost
+   * of a pass dwarfs its arithmetic.
+   */
   private vcycle(index: number): void {
     const level = this.levels[index];
-    if (index > 0) level.x.clear();
+    const zeroGuess = index > 0;
 
     if (index === this.levels.length - 1) {
-      this.smooth(level, COARSEST_ITERATIONS, 1.0);
+      level.x.write.bind();
+      const cs = this.coarseSolveShader;
+      cs.use();
+      cs.setTexture(0, "uRhs", level.rhs.texture);
+      cs.setTexture(1, "uNeighbors", level.neighbors.texture);
+      cs.setFloat("uH2", level.h2);
+      this.quad.draw();
+      level.x.swap();
       return;
     }
 
-    this.smooth(level, PRE_SMOOTH, SMOOTH_OMEGA);
-    this.computeResidual(level);
+    this.smooth(level, PRE_SMOOTH, true, { zeroGuess });
 
     const coarse = this.levels[index + 1];
     coarse.rhs.bind();
-    this.restrictShader.use();
-    this.restrictShader.setTexture(0, "uFine", level.residual.texture);
+    const rr = this.restrictResidualShader;
+    rr.use();
+    rr.setTexture(0, "uPressure", level.x.read.texture);
+    rr.setTexture(1, "uRhs", level.rhs.texture);
+    rr.setTexture(2, "uNeighbors", level.neighbors.texture);
+    rr.setTexture(3, "uObstacle", level.obstacle);
+    rr.setFloat("uH2", level.h2);
     this.quad.draw();
 
     this.vcycle(index + 1);
 
-    level.x.write.bind();
-    const ps = this.prolongShader;
-    ps.use();
-    ps.setTexture(0, "uPressure", level.x.read.texture);
-    ps.setTexture(1, "uCoarse", coarse.x.read.texture);
-    ps.setVec2("uTexel", level.texel[0], level.texel[1]);
-    this.quad.draw();
-    level.x.swap();
-
-    this.smooth(level, POST_SMOOTH, SMOOTH_OMEGA);
+    this.smooth(level, POST_SMOOTH, true, { coarse: coarse.x.read.texture });
   }
 
-  private computeResidual(level: Level): void {
-    level.residual.bind();
-    const rs = this.residualShader;
-    rs.use();
-    rs.setTexture(0, "uPressure", level.x.read.texture);
-    rs.setTexture(1, "uRhs", level.rhs.texture);
-    rs.setTexture(2, "uNeighbors", level.neighbors.texture);
-    rs.setTexture(3, "uObstacle", level.obstacle);
-    rs.setVec2("uTexel", level.texel[0], level.texel[1]);
-    rs.setFloat("uH2", level.h2);
-    this.quad.draw();
-  }
-
-  private smooth(level: Level, iterations: number, omega: number): void {
+  /**
+   * `passes` Jacobi iterations, or red-black Gauss-Seidel half-sweeps of
+   * alternating color. The first pass can start from a zero guess or apply
+   * a coarse-grid correction on the fly.
+   */
+  private smooth(
+    level: Level,
+    passes: number,
+    redBlack: boolean,
+    first: { zeroGuess?: boolean; coarse?: WebGLTexture } = {}
+  ): void {
     const js = this.jacobiShader;
-    for (let i = 0; i < iterations; i++) {
+    for (let i = 0; i < passes; i++) {
+      const coarse = i === 0 ? first.coarse ?? null : null;
       level.x.write.bind();
       js.use();
       js.setTexture(0, "uPressure", level.x.read.texture);
       js.setTexture(1, "uRhs", level.rhs.texture);
       js.setTexture(2, "uNeighbors", level.neighbors.texture);
+      js.setTexture(3, "uCoarse", coarse);
       js.setVec2("uTexel", level.texel[0], level.texel[1]);
       js.setFloat("uH2", level.h2);
-      js.setFloat("uOmega", omega);
+      js.setInt("uParity", redBlack ? i & 1 : -1);
+      js.setInt("uZeroGuess", i === 0 && first.zeroGuess ? 1 : 0);
+      js.setInt("uCorrect", coarse ? 1 : 0);
       this.quad.draw();
       level.x.swap();
     }

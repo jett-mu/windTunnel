@@ -27,9 +27,9 @@ void main() {
   vec2 backward = texture(uBackward, vUv).xy;
   vec2 corrected = forward + 0.5 * (source - backward);
 
-  // uSource is the velocity field itself (self-advection).
-  vec2 vel = source;
-  vec2 backUv = clamp(vUv - uDt * vel * uTexel, vec2(0.0), vec2(1.0));
+  // uSource is the velocity field itself (self-advection); retrace exactly
+  // as the forward pass did, to find the texels it interpolated between.
+  vec2 backUv = traceBack(uSource, uObstacle, vUv, uTexel, uDt);
   ivec2 size = textureSize(uSource, 0);
   ivec2 i0 = clamp(ivec2(floor(backUv * vec2(size) - 0.5)), ivec2(0), size - 1);
   ivec2 i1 = min(i0 + 1, size - 1);

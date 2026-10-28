@@ -45,6 +45,10 @@ export class Shader {
   readonly gl: WebGL2RenderingContext;
   readonly program: WebGLProgram;
   private uniformCache = new Map<string, WebGLUniformLocation | null>();
+  /** Last value uploaded per uniform. Uniform state lives in the program, so
+   * re-sending an unchanged value (most of them, every pass) is pure
+   * CPU/driver overhead; the solver issues dozens of passes per step. */
+  private valueCache = new Map<string, number[]>();
 
   constructor(gl: WebGL2RenderingContext, vertSrc: string, fragSrc: string, options: ShaderOptions = {}) {
     this.gl = gl;
@@ -83,29 +87,44 @@ export class Shader {
     return l;
   }
 
+  /** True if `values` differ from what `name` last received (and records them). */
+  private changed(name: string, a: number, b = 0, c = 0, d = 0): boolean {
+    const prev = this.valueCache.get(name);
+    if (prev) {
+      if (prev[0] === a && prev[1] === b && prev[2] === c && prev[3] === d) return false;
+      prev[0] = a;
+      prev[1] = b;
+      prev[2] = c;
+      prev[3] = d;
+    } else {
+      this.valueCache.set(name, [a, b, c, d]);
+    }
+    return true;
+  }
+
   setFloat(name: string, value: number): void {
     const l = this.loc(name);
-    if (l) this.gl.uniform1f(l, value);
+    if (l && this.changed(name, value)) this.gl.uniform1f(l, value);
   }
 
   setInt(name: string, value: number): void {
     const l = this.loc(name);
-    if (l) this.gl.uniform1i(l, value);
+    if (l && this.changed(name, value)) this.gl.uniform1i(l, value);
   }
 
   setVec2(name: string, x: number, y: number): void {
     const l = this.loc(name);
-    if (l) this.gl.uniform2f(l, x, y);
+    if (l && this.changed(name, x, y)) this.gl.uniform2f(l, x, y);
   }
 
   setVec3(name: string, x: number, y: number, z: number): void {
     const l = this.loc(name);
-    if (l) this.gl.uniform3f(l, x, y, z);
+    if (l && this.changed(name, x, y, z)) this.gl.uniform3f(l, x, y, z);
   }
 
   setVec4(name: string, x: number, y: number, z: number, w: number): void {
     const l = this.loc(name);
-    if (l) this.gl.uniform4f(l, x, y, z, w);
+    if (l && this.changed(name, x, y, z, w)) this.gl.uniform4f(l, x, y, z, w);
   }
 
   /** Binds `texture` to `unit` and sets the sampler uniform `name` to that unit. */
@@ -113,8 +132,7 @@ export class Shader {
     const gl = this.gl;
     gl.activeTexture(gl.TEXTURE0 + unit);
     gl.bindTexture(gl.TEXTURE_2D, texture);
-    const l = this.loc(name);
-    if (l) gl.uniform1i(l, unit);
+    this.setInt(name, unit);
   }
 
   attribLocation(name: string): number {

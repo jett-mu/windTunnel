@@ -52,9 +52,12 @@ export class FluidSolver {
   private gradientSubtractShader: Shader;
   private boundaryShader: Shader;
 
-  constructor(glCtx: GLContext, pressureSolver: PressureSolver = "multigrid") {
+  private multigridCycles: number;
+
+  constructor(glCtx: GLContext, pressureSolver: PressureSolver = "multigrid", multigridCycles = MULTIGRID_CYCLES) {
     const gl = glCtx.gl;
     this.pressureSolver = pressureSolver;
+    this.multigridCycles = multigridCycles;
     this.gl = gl;
     this.quad = new FullscreenQuad(gl);
     this.texel = [1 / GRID_W, 1 / GRID_H];
@@ -129,6 +132,7 @@ export class FluidSolver {
     s.use();
     s.setTexture(0, "uVelocity", this.velocity.read.texture);
     s.setTexture(1, "uSource", source);
+    s.setTexture(2, "uObstacle", this.obstacle);
     s.setVec2("uTexel", this.texel[0], this.texel[1]);
     s.setFloat("uDt", dt);
     this.quad.draw();
@@ -190,7 +194,7 @@ export class FluidSolver {
     this.quad.draw();
 
     // 6. Pressure Poisson solve, warm-started from the previous step.
-    if (this.pressureSolver === "multigrid") this.multigrid.solve(MULTIGRID_CYCLES);
+    if (this.pressureSolver === "multigrid") this.multigrid.solve(this.multigridCycles);
     else this.multigrid.jacobi(JACOBI_ITERATIONS);
 
     // 7. Subtract pressure gradient (projection).

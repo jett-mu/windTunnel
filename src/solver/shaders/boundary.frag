@@ -42,14 +42,15 @@ void main() {
 
   // No-penetration: the mask gradient points into the wall, so strip any
   // velocity component heading that way while leaving tangential flow
-  // alone (beyond a light no-slip drag), so flow can stay attached.
+  // alone, so flow can stay attached. Wall friction isn't faked here: it
+  // comes from the viscous term, which sees the zero velocity inside the
+  // solid, so it scales with the viscosity setting as it should.
   vec2 intoWall = vec2(nb.y - nb.x, nb.w - nb.z);
   float gradLen = length(intoWall);
   if (gradLen > 1e-3) {
     vec2 n = intoWall / gradLen;
     vel -= max(dot(vel, n), 0.0) * n * min(1.0, neighborSolid * 2.0);
   }
-  vel *= 1.0 - 0.15 * neighborSolid * (1.0 - solid);
   vel *= 1.0 - solid;
 
   // Safety clamp: bounds any residual energy injection so a pathological

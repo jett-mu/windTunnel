@@ -17,6 +17,8 @@ export interface ForceResult {
   drag: number;
   cl: number;
   cd: number;
+  /** Skin-friction share of `cd` (the rest is pressure/form drag). */
+  cdFriction: number;
   /** Pitching moment coefficient about the pitch axis, nose-up positive. */
   cm: number;
   /** Lift-to-drag ratio; NaN when drag is ~0. */
@@ -32,6 +34,7 @@ export const ZERO_FORCES: ForceResult = {
   drag: 0,
   cl: 0,
   cd: 0,
+  cdFriction: 0,
   cm: 0,
   ld: NaN,
   xcp: null,
@@ -178,7 +181,7 @@ export class ForceCalculator {
    * actually advanced) starts a new one. Returns true when
    * `getLatestForces()` holds a result it didn't before this call.
    */
-  update(pressureTexture: WebGLTexture, flow: FlowConditions, issue: boolean): boolean {
+  update(pressureTexture: WebGLTexture, velocityTexture: WebGLTexture, flow: FlowConditions, issue: boolean): boolean {
     const gl = this.gl;
     let fresh = false;
     while (this.pending.length > 0) {
@@ -211,6 +214,7 @@ export class ForceCalculator {
     this.shader.use();
     this.shader.setTexture(0, "uSampleUV", this.sampleUVTexture);
     this.shader.setTexture(1, "uPressure", pressureTexture);
+    this.shader.setTexture(2, "uVelocity", velocityTexture);
     this.quad.draw();
 
     const pbo = this.freePbos.pop()!;
@@ -240,27 +244,43 @@ export class ForceCalculator {
     return fresh;
   }
 
-  private integrate(pressures: Float32Array, snap: Snapshot): ForceResult {
+  private integrate(samples: Float32Array, snap: Snapshot): ForceResult {
+    const { airspeed, density, viscosity, dt } = snap.flow;
     // The solver's pressure is the projection potential (u -= grad p per
-    // step), i.e. physical pressure * dt / density. Integrate in solver
-    // units, then convert once.
+    // step), i.e. physical pressure * dt / density. Integrate everything in
+    // those solver units, then convert once.
+    //
+    // Skin friction: wall shear tau = rho * nu * du_t/dn, with the
+    // tangential velocity at the sample point (SAMPLE_OFFSET_CELLS out from
+    // the no-slip wall) over that distance as the gradient. In solver units
+    // that's dt * nu * u_t / d per unit length.
+    const shearScale = (dt * viscosity) / SAMPLE_OFFSET_CELLS;
     let fx = 0;
     let fy = 0;
+    let frictionX = 0;
     let mz = 0;
     for (let i = 0; i < snap.samples.length; i++) {
-      const p = pressures[i * 4];
+      const p = samples[i * 4];
+      const vx = samples[i * 4 + 1];
+      const vy = samples[i * 4 + 2];
       const s = snap.samples[i];
-      // Surface pressure integration: pressure pushes inward, so the force
-      // contribution on the body is -p * n * segment_length.
-      const sx = -p * s.normal.x * s.length;
-      const sy = -p * s.normal.y * s.length;
+      const n = s.normal;
+      // Pressure pushes inward: -p * n * segment_length.
+      let sx = -p * n.x * s.length;
+      let sy = -p * n.y * s.length;
+      // Shear drags the surface along with the tangential flow.
+      const vn = vx * n.x + vy * n.y;
+      const tx = shearScale * (vx - vn * n.x) * s.length;
+      const ty = shearScale * (vy - vn * n.y) * s.length;
+      frictionX += tx;
+      sx += tx;
+      sy += ty;
       fx += sx;
       fy += sy;
       // Counter-clockwise (z) moment about the pitch axis.
       mz += (s.point.x - snap.pivot.x) * sy - (s.point.y - snap.pivot.y) * sx;
     }
 
-    const { airspeed, density, viscosity, dt } = snap.flow;
     const toPhysical = density / dt;
     // Drag is the component along the freestream (+x); world +y is "up",
     // toward the airfoil's upper/suction surface, so lift is +y directly.
@@ -273,6 +293,7 @@ export class ForceCalculator {
     const valid = qSolver * L > 1e-9;
     const cl = valid ? fy / (qSolver * L) : 0;
     const cd = valid ? fx / (qSolver * L) : 0;
+    const cdFriction = valid ? frictionX / (qSolver * L) : 0;
     // Nose-up is clockwise in this y-up frame, hence the sign flip.
     const cm = valid ? -mz / (qSolver * L * L) : 0;
     const ld = Math.abs(cd) > 1e-4 ? cl / cd : NaN;
@@ -285,6 +306,6 @@ export class ForceCalculator {
     }
 
     const reynolds = viscosity > 1e-6 ? (airspeed * L) / viscosity : 0;
-    return { lift, drag, cl, cd, cm, ld, xcp, reynolds, dynamicPressure: q };
+    return { lift, drag, cl, cd, cdFriction, cm, ld, xcp, reynolds, dynamicPressure: q };
   }
 }

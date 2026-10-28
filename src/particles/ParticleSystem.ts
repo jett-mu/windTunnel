@@ -197,7 +197,7 @@ export class ParticleSystem {
     // 2. Draw fresh particle points directly onto the now-faded buffer.
     // Color uses straight-alpha "over"; alpha accumulates as
     // a + dst*(1-a) (not a*a), keeping the buffer premultiplied.
-    this.trailAccum.read.bind();
+    this.trailAccum.read.bind(true);
     gl.enable(gl.BLEND);
     gl.blendFuncSeparate(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA, gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
     const s = this.renderShader;

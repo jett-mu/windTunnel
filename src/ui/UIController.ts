@@ -208,7 +208,9 @@ export class UIController {
 
     const keys: [string, string, string][] = [
       ["cl", "Cl", "Lift coefficient (smoothed)"],
-      ["cd", "Cd", "Pressure-drag coefficient (smoothed)"],
+      ["cd", "Cd", "Total drag coefficient (smoothed)"],
+      ["cdp", "Cd pressure", "Form/pressure drag share of Cd"],
+      ["cdf", "Cd friction", "Skin-friction share of Cd (scales with viscosity)"],
       ["cm", "Cm", "Pitching-moment coefficient about the pitch axis, nose-up positive"],
       ["ld", "L / D", "Lift-to-drag ratio"],
       ["lift", "Lift", "Lift force, density-scaled sim units"],
@@ -306,6 +308,13 @@ export class UIController {
     this.addSlider({ label: "Airspeed", range: RANGES.airspeed, get: () => sp.airspeed, set: (v) => (sp.airspeed = v), format: fmt0 });
     this.addSlider({ label: "Air Density", range: RANGES.density, get: () => sp.density, set: (v) => (sp.density = v), format: fmt2 });
     this.addSlider({ label: "Viscosity", range: RANGES.viscosity, get: () => sp.viscosity, set: (v) => (sp.viscosity = v), format: fmt2 });
+    this.addSlider({
+      label: "Vortex Confinement",
+      range: RANGES.vorticityEpsilon,
+      get: () => sp.vorticityEpsilon,
+      set: (v) => (sp.vorticityEpsilon = v),
+      format: fmt2,
+    });
     this.addSlider({
       label: "Sim Speed",
       range: RANGES.tickRate,
@@ -637,6 +646,7 @@ export class UIController {
       const s = this.smoothed;
       s.cl += (forces.cl - s.cl) * k;
       s.cd += (forces.cd - s.cd) * k;
+      s.cdFriction += (forces.cdFriction - s.cdFriction) * k;
       s.cm += (forces.cm - s.cm) * k;
       s.lift += (forces.lift - s.lift) * k;
       s.drag += (forces.drag - s.drag) * k;
@@ -673,6 +683,8 @@ export class UIController {
       const big = (v: number) => (Math.abs(v) >= 1e5 ? v.toExponential(2) : v.toFixed(0));
       this.setReadout("cl", f.cl.toFixed(3));
       this.setReadout("cd", f.cd.toFixed(3));
+      this.setReadout("cdp", (f.cd - f.cdFriction).toFixed(3));
+      this.setReadout("cdf", f.cdFriction.toFixed(4));
       this.setReadout("cm", f.cm.toFixed(3));
       this.setReadout("ld", Number.isFinite(f.ld) ? f.ld.toFixed(1) : "--");
       this.setReadout("lift", big(f.lift));

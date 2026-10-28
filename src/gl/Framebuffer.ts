@@ -4,6 +4,8 @@ export interface TextureFormat {
   type: number;
 }
 
+const ATTACHMENTS = [WebGL2RenderingContext.COLOR_ATTACHMENT0];
+
 /**
  * A single render target: a texture + the framebuffer that targets it.
  * Used for every grid field in the solver (velocity, pressure, divergence, vorticity)
@@ -51,10 +53,18 @@ export class Framebuffer {
     gl.bindTexture(gl.TEXTURE_2D, null);
   }
 
-  bind(): void {
+  /**
+   * Makes this the render target. Unless `preserveContents`, the previous
+   * contents are declared dead (invalidateFramebuffer): nearly every pass
+   * overwrites the whole target, and on tile-based GPUs (Apple, mobile) this
+   * lets the driver skip loading the old texels into tile memory, a fixed
+   * per-pass cost that adds up over the solver's dozens of passes per step.
+   */
+  bind(preserveContents = false): void {
     const gl = this.gl;
     gl.bindFramebuffer(gl.FRAMEBUFFER, this.fbo);
     gl.viewport(0, 0, this.width, this.height);
+    if (!preserveContents) gl.invalidateFramebuffer(gl.FRAMEBUFFER, ATTACHMENTS);
     // Defensively clear texture units: a texture bound as a sampler in a
     // previous pass (possibly this same texture, after a DoubleFBO swap)
     // left bound to a unit would otherwise trip WebGL's feedback-loop check

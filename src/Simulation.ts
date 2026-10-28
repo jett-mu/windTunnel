@@ -48,6 +48,10 @@ export class Simulation {
   private ui: UIController;
   private params: SolverParams;
   private timer: GpuTimer;
+  private debug: boolean;
+  /** Debug HUD: wall-clock ms per solver step from a periodic GPU-synced sample. */
+  private solverMs: number | null = null;
+  private debugFrame = 0;
 
   private container: HTMLElement;
   private stage: HTMLElement;
@@ -87,8 +91,15 @@ export class Simulation {
 
     this.glCtx = new GLContext(this.canvas);
     const query = new URLSearchParams(location.search);
-    this.timer = new GpuTimer(this.glCtx.gl, query.has("debug"));
-    this.solver = new FluidSolver(this.glCtx, query.get("solver") === "jacobi" ? "jacobi" : "multigrid");
+    this.debug = query.has("debug");
+    this.timer = new GpuTimer(this.glCtx.gl, this.debug);
+    // Debug-only solver overrides for A/B comparison: ?solver=jacobi, ?mgcycles=N.
+    const cycles = Number(query.get("mgcycles"));
+    this.solver = new FluidSolver(
+      this.glCtx,
+      query.get("solver") === "jacobi" ? "jacobi" : "multigrid",
+      Number.isInteger(cycles) && cycles > 0 && cycles <= 8 ? cycles : undefined
+    );
     this.airfoil = new Airfoil(GRID_W, GRID_H, state.airfoil);
     this.obstacleMask = new ObstacleMask(this.glCtx.gl, GRID_W, GRID_H);
     this.sweep = new PolarSweep(this.airfoil);
@@ -128,13 +139,29 @@ export class Simulation {
       hooks.onContextLost();
     });
 
-    if (this.timer.enabled) {
+    if (this.debug) {
       (window as unknown as { __wt: unknown }).__wt = {
         divergence: () => this.solver.measureDivergence(),
         residual: () => this.solver.measureResidual(),
         forces: () => this.forceCalc.getLatestForces(),
+        // Wall-clock ms per solver step over `n` back-to-back steps, GPU-synced.
+        benchSolver: (n = 300) => {
+          for (let i = 0; i < 30; i++) this.solver.step(this.params.dt, this.params);
+          this.gpuSync();
+          const t0 = performance.now();
+          for (let i = 0; i < n; i++) this.solver.step(this.params.dt, this.params);
+          this.gpuSync();
+          return (performance.now() - t0) / n;
+        },
       };
     }
+  }
+
+  /** Debug-only: blocks until the GPU has finished all queued solver work (1-texel readback). */
+  private gpuSync(): void {
+    const gl = this.glCtx.gl;
+    this.solver.velocity.read.bind(true);
+    gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.FLOAT, new Float32Array(4));
   }
 
   /** Letterboxes the canvas inside the stage at the grid's aspect ratio, so the body is never stretched. */
@@ -232,9 +259,18 @@ export class Simulation {
     }
 
     const obstacle = this.obstacleMask.getTexture();
-    if (steps > 0) this.timer.begin("solver");
+    // Debug HUD: about once a second, wall-time this frame's solver steps
+    // between two GPU syncs. GPU timer queries are unreliable here: on some
+    // backends (ANGLE/Metal) a long-running fragment, like the single-pass
+    // coarse multigrid solve, inflates TIME_ELAPSED several-fold.
+    const sample = this.debug && steps > 0 && ++this.debugFrame % 60 === 0;
+    if (sample) this.gpuSync();
+    const solverStart = performance.now();
     for (let i = 0; i < steps; i++) this.solver.step(dt, this.params);
-    this.timer.end(steps);
+    if (sample) {
+      this.gpuSync();
+      this.solverMs = (performance.now() - solverStart) / steps;
+    }
 
     this.timer.begin("particles");
     for (let i = 0; i < steps; i++) {
@@ -266,7 +302,7 @@ export class Simulation {
       viscosity: this.params.viscosity,
       dt,
     };
-    if (this.forceCalc.update(this.solver.getPressureTexture(), flow, steps > 0)) {
+    if (this.forceCalc.update(this.solver.getPressureTexture(), this.solver.getVelocityTexture(), flow, steps > 0)) {
       const forces = this.forceCalc.getLatestForces();
       this.ui.pushForces(forces, this.simTime);
       this.sweep.update(forces, this.simTime);
@@ -298,7 +334,7 @@ export class Simulation {
     }
 
     this.cpuMs += (performance.now() - cpuStart - this.cpuMs) * 0.1;
-    if (this.timer.enabled) {
+    if (this.debug) {
       this.timer.poll();
       const ms = (label: string) => {
         const v = this.timer.get(label);
@@ -306,7 +342,7 @@ export class Simulation {
       };
       this.ui.setDebugText(
         `${this.fps.toFixed(0)} fps · cpu ${this.cpuMs.toFixed(2)}ms\n` +
-          `solver ${ms("solver")}ms/step\n` +
+          `solver ${this.solverMs === null ? "--" : this.solverMs.toFixed(2)}ms/step\n` +
           `particles ${ms("particles")}ms · render ${ms("render")}ms`
       );
     }
