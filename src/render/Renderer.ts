@@ -4,6 +4,7 @@ import { FullscreenQuad } from "../gl/FullscreenQuad";
 import { Airfoil } from "../airfoil/Airfoil";
 import type { ForceResult } from "../forces/ForceCalculator";
 import { GRID_W, GRID_H } from "../solver/SolverParams";
+import { viewShowsParticles } from "../solver/SolverParams";
 import type { ViewMode } from "../solver/SolverParams";
 import type { Vec2 } from "../gl/math";
 import { perp, scale as vscale, add } from "../gl/math";
@@ -20,7 +21,14 @@ const ARROW_MAX_LEN = 90;
 const ARROW_PER_COEFF = 40;
 const ARROW_WIDTH = 2.5;
 
-const VIEW_MODE_INDEX: Record<ViewMode, number> = { pressure: 0, speed: 1, vorticity: 2, none: 3 };
+const VIEW_MODE_INDEX: Record<ViewMode, number> = {
+  pressure: 0,
+  speed: 1,
+  vorticity: 2,
+  none: 3,
+  schlieren: 4,
+  smoke: 5,
+};
 
 /** Writes a 3-triangle arrow into `out` (18 floats). */
 function buildArrow(out: Float32Array, origin: Vec2, dir: Vec2, magnitude: number): void {
@@ -52,6 +60,7 @@ export interface FieldTextures {
   trail: WebGLTexture;
   velocity: WebGLTexture;
   vorticity: WebGLTexture;
+  smoke: WebGLTexture;
 }
 
 export interface RenderOptions {
@@ -62,8 +71,8 @@ export interface RenderOptions {
 }
 
 /**
- * Final compositing stage: the selected background field (Cp, speed or
- * vorticity) + particle trails, blended together in `pressureField.frag` as
+ * Final compositing stage: the selected background field (Cp, speed,
+ * vorticity, schlieren or smoke) + particle trails, blended together in `pressureField.frag` as
  * a fullscreen pass, then the body outline and lift/drag force arrows drawn
  * as flat-colored geometry on top.
  */
@@ -159,7 +168,9 @@ export class Renderer {
     fs.setTexture(2, "uTrail", tex.trail);
     fs.setTexture(3, "uVelocity", tex.velocity);
     fs.setTexture(4, "uVorticity", tex.vorticity);
+    fs.setTexture(5, "uSmoke", tex.smoke);
     fs.setInt("uViewMode", VIEW_MODE_INDEX[opts.viewMode]);
+    fs.setInt("uShowTrails", viewShowsParticles(opts.viewMode) ? 1 : 0);
     fs.setFloat("uScale", opts.scale);
     fs.setFloat("uDt", opts.dt);
     fs.setFloat("uFreestream", opts.airspeed);

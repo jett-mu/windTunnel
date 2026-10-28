@@ -129,6 +129,7 @@ export function makeFormats(gl: WebGL2RenderingContext) {
   return {
     RG32F: { internalFormat: gl.RG32F, format: gl.RG, type: gl.FLOAT } as TextureFormat,
     R32F: { internalFormat: gl.R32F, format: gl.RED, type: gl.FLOAT } as TextureFormat,
+    R16F: { internalFormat: gl.R16F, format: gl.RED, type: gl.HALF_FLOAT } as TextureFormat,
     RGBA32F: { internalFormat: gl.RGBA32F, format: gl.RGBA, type: gl.FLOAT } as TextureFormat,
     RGBA16F: { internalFormat: gl.RGBA16F, format: gl.RGBA, type: gl.FLOAT } as TextureFormat,
     R8: { internalFormat: gl.R8, format: gl.RED, type: gl.UNSIGNED_BYTE } as TextureFormat,

@@ -11,8 +11,13 @@ export const JACOBI_ITERATIONS = 80;
 /** Velocity safety clamp, as a multiple of freestream speed. */
 export const MAX_SPEED_FACTOR = 6;
 
-export type ViewMode = "pressure" | "speed" | "vorticity" | "none";
+export type ViewMode = "pressure" | "speed" | "vorticity" | "schlieren" | "smoke" | "none";
 export type ParticleColorMode = "white" | "speed";
+
+/** The smoke and schlieren views stand alone, as in a real tunnel: no particles on top. */
+export function viewShowsParticles(mode: ViewMode): boolean {
+  return mode !== "smoke" && mode !== "schlieren";
+}
 
 /** Single source of truth for every tunable parameter, mutated by UIController. */
 export interface SolverParams {
@@ -43,6 +48,10 @@ export interface SolverParams {
   pressureScale: number;
   viewMode: ViewMode;
   particleColor: ParticleColorMode;
+  /** Smoke view: number of rake nozzles. */
+  smokeStreams: number;
+  /** Smoke view: rake span as a fraction of tunnel height, centred on the body. */
+  smokeSpan: number;
 }
 
 export const TICK_RATE_MIN = 1;
@@ -62,4 +71,6 @@ export const DEFAULT_SOLVER_PARAMS: SolverParams = {
   pressureScale: 1.0,
   viewMode: "pressure",
   particleColor: "white",
+  smokeStreams: 8,
+  smokeSpan: 0.5,
 };

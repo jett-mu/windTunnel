@@ -34,6 +34,8 @@ export const RANGES = {
   particleCount: r(1000, 50000, 1000),
   trailLength: r(0.8, 0.99, 0.005),
   pressureScale: r(0.1, 4, 0.1),
+  smokeStreams: r(1, 32, 1),
+  smokeSpanPct: r(10, 100, 1),
   aoaDeg: r(AOA_MIN_DEG, AOA_MAX_DEG, 0.5),
   maxCamberPct: r(0, 9, 0.5),
   camberPosTenths: r(1, 9, 0.5),

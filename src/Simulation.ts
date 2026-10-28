@@ -1,12 +1,13 @@
 import { GLContext } from "./gl/GLContext";
 import { GpuTimer } from "./gl/GpuTimer";
 import { FluidSolver } from "./solver/FluidSolver";
-import { GRID_W, GRID_H, DEFAULT_SOLVER_PARAMS } from "./solver/SolverParams";
+import { GRID_W, GRID_H, DEFAULT_SOLVER_PARAMS, viewShowsParticles } from "./solver/SolverParams";
 import type { SolverParams } from "./solver/SolverParams";
 import { Airfoil, DEFAULT_AIRFOIL_PARAMS } from "./airfoil/Airfoil";
 import type { AirfoilParams } from "./airfoil/Airfoil";
 import { ObstacleMask } from "./airfoil/ObstacleMask";
 import { ParticleSystem } from "./particles/ParticleSystem";
+import { SmokeRake } from "./smoke/SmokeRake";
 import { ForceCalculator } from "./forces/ForceCalculator";
 import { Renderer } from "./render/Renderer";
 import { PolarSweep } from "./analysis/PolarSweep";
@@ -44,6 +45,9 @@ export class Simulation {
   private airfoil: Airfoil;
   private obstacleMask: ObstacleMask;
   private particles: ParticleSystem;
+  private smoke: SmokeRake;
+  /** Smoke is only advected while it's on screen; turning it back on restarts from a clean tunnel. */
+  private smokeActive = false;
   private forceCalc: ForceCalculator;
   private renderer: Renderer;
   private sweep: PolarSweep;
@@ -108,6 +112,7 @@ export class Simulation {
 
     this.fitCanvas();
     this.particles = new ParticleSystem(this.glCtx, this.params.particleCount, this.canvas.width, this.canvas.height);
+    this.smoke = new SmokeRake(this.glCtx);
     this.forceCalc = new ForceCalculator(this.glCtx, this.airfoil);
     this.renderer = new Renderer(this.glCtx, this.airfoil);
     this.ui = new UIController(container, this.stage, this.params, this.airfoil, this.sweep, {
@@ -206,6 +211,7 @@ export class Simulation {
   private resetFlow(): void {
     this.solver.reset(this.params.airspeed);
     this.particles.clearTrails();
+    this.smoke.clear();
     this.forceCalc.reset();
     this.ui.resetHistory();
     this.accumulator = 0;
@@ -284,12 +290,18 @@ export class Simulation {
       this.solverMs = (performance.now() - solverStart) / steps;
     }
 
+    // Particles sit still (and cost nothing) while a standalone view is up.
+    const smokeView = this.params.viewMode === "smoke";
+    if (smokeView && !this.smokeActive) this.smoke.clear();
+    this.smokeActive = smokeView;
+    const particleSteps = viewShowsParticles(this.params.viewMode) ? steps : 0;
+
     this.timer.begin("particles");
     if (!this.paused) this.trailWallS += wallDt;
-    if (steps > 0) {
+    if (particleSteps > 0) {
       // Trail fade is per wall-clock time (one `trailLength` factor per
       // 60 Hz frame), so trails look the same length at any refresh rate.
-      const frames = this.paused ? steps : this.trailWallS * 60;
+      const frames = this.paused ? particleSteps : this.trailWallS * 60;
       this.trailWallS = 0;
       this.particles.fadeTrails(Math.pow(this.params.trailLength, frames));
     }
@@ -298,11 +310,19 @@ export class Simulation {
       color: PARTICLE_COLOR,
       colorBySpeed: this.params.particleColor === "speed",
     };
-    for (let i = 0; i < steps; i++) {
+    for (let i = 0; i < particleSteps; i++) {
       this.particles.step(dt, this.solver.getVelocityTexture(), obstacle, this.params.airspeed);
-      this.particles.drawStreaks(style, this.solver.getVelocityTexture(), this.params.airspeed, steps);
-      this.simTime += dt;
+      this.particles.drawStreaks(style, this.solver.getVelocityTexture(), this.params.airspeed, particleSteps);
     }
+    if (smokeView) {
+      const rake = {
+        nozzles: this.params.smokeStreams,
+        center: this.airfoil.params.posYFrac,
+        span: this.params.smokeSpan,
+      };
+      for (let i = 0; i < steps; i++) this.smoke.step(dt, this.solver.getVelocityTexture(), obstacle, rake);
+    }
+    this.simTime += steps * dt;
     this.timer.end();
 
     const flow = {
@@ -325,6 +345,7 @@ export class Simulation {
         trail: this.particles.getTrailTexture(),
         velocity: this.solver.getVelocityTexture(),
         vorticity: this.solver.getVorticityTexture(),
+        smoke: this.smoke.getTexture(),
       },
       { viewMode: this.params.viewMode, scale: this.params.pressureScale, dt, airspeed: this.params.airspeed },
       this.forceCalc.getLatestForces()

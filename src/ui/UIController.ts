@@ -1,4 +1,5 @@
 import "./panel.css";
+import { viewShowsParticles } from "../solver/SolverParams";
 import type { SolverParams, ViewMode, ParticleColorMode } from "../solver/SolverParams";
 import { Airfoil } from "../airfoil/Airfoil";
 import type { ControlSurfaceParams } from "../airfoil/NACA";
@@ -59,6 +60,8 @@ const VIEW_OPTIONS: SegmentOption<ViewMode>[] = [
   { value: "pressure", label: "Cp", title: "Pressure coefficient" },
   { value: "speed", label: "Speed", title: "Speed relative to freestream" },
   { value: "vorticity", label: "Vort", title: "Vorticity" },
+  { value: "schlieren", label: "Schl", title: "Schlieren (pressure gradient)" },
+  { value: "smoke", label: "Smoke", title: "Smoke streams from an inlet rake" },
   { value: "none", label: "Off", title: "Particles only" },
 ];
 const VIEW_ORDER = VIEW_OPTIONS.map((o) => o.value);
@@ -477,32 +480,55 @@ export class UIController {
   private buildVisualization(): void {
     this.section("Visualization");
     const sp = this.solverParams;
-    this.addSegmented<ViewMode>("Field", VIEW_OPTIONS, () => sp.viewMode, (v) => (sp.viewMode = v));
-    this.addSegmented<ParticleColorMode>(
-      "Particles",
-      [
-        { value: "white", label: "White" },
-        { value: "speed", label: "By speed" },
-      ],
-      () => sp.particleColor,
-      (v) => (sp.particleColor = v)
-    );
-    this.addSlider({
-      label: "Particle Count",
-      range: RANGES.particleCount,
-      get: () => sp.particleCount,
-      set: (v) => {
-        sp.particleCount = v;
-        this.actions.onParticleCountChange(v);
-      },
-      format: fmt0,
-    });
-    this.addSlider({
-      label: "Trail Length",
-      range: RANGES.trailLength,
-      get: () => sp.trailLength,
-      set: (v) => (sp.trailLength = v),
-      format: (v) => v.toFixed(3),
+    const field = this.addSegmented<ViewMode>("Field", VIEW_OPTIONS, () => sp.viewMode, (v) => (sp.viewMode = v));
+    field.classList.add("stacked");
+    const smokeRows = [
+      this.addSlider({
+        label: "Smoke Streams",
+        range: RANGES.smokeStreams,
+        get: () => sp.smokeStreams,
+        set: (v) => (sp.smokeStreams = v),
+        format: fmt0,
+      }),
+      this.addSlider({
+        label: "Rake Span (%)",
+        range: RANGES.smokeSpanPct,
+        get: () => sp.smokeSpan * 100,
+        set: (v) => (sp.smokeSpan = v / 100),
+        format: fmt0,
+      }),
+    ];
+    const particleRows = [
+      this.addSegmented<ParticleColorMode>(
+        "Particles",
+        [
+          { value: "white", label: "White" },
+          { value: "speed", label: "By speed" },
+        ],
+        () => sp.particleColor,
+        (v) => (sp.particleColor = v)
+      ),
+      this.addSlider({
+        label: "Particle Count",
+        range: RANGES.particleCount,
+        get: () => sp.particleCount,
+        set: (v) => {
+          sp.particleCount = v;
+          this.actions.onParticleCountChange(v);
+        },
+        format: fmt0,
+      }),
+      this.addSlider({
+        label: "Trail Length",
+        range: RANGES.trailLength,
+        get: () => sp.trailLength,
+        set: (v) => (sp.trailLength = v),
+        format: (v) => v.toFixed(3),
+      }),
+    ];
+    this.syncers.push(() => {
+      for (const el of smokeRows) el.hidden = sp.viewMode !== "smoke";
+      for (const el of particleRows) el.hidden = !viewShowsParticles(sp.viewMode);
     });
     this.addSlider({
       label: "Field Contrast",
@@ -588,7 +614,13 @@ export class UIController {
     return row;
   }
 
-  private addSegmented<T extends string>(label: string, options: SegmentOption<T>[], get: () => T, set: (v: T) => void): void {
+  /** Appends a labeled segmented control bound to `get`/`set`, returning its row. */
+  private addSegmented<T extends string>(
+    label: string,
+    options: SegmentOption<T>[],
+    get: () => T,
+    set: (v: T) => void
+  ): HTMLElement {
     const row = document.createElement("div");
     row.className = "segment-row";
     const l = document.createElement("span");
@@ -620,6 +652,7 @@ export class UIController {
       });
     };
     this.syncers.push(sync);
+    return row;
   }
 
   // ------------------------------------------------------------ live updates

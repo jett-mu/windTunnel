@@ -6,7 +6,9 @@ uniform sampler2D uObstacle;
 uniform sampler2D uTrail;
 uniform sampler2D uVelocity;
 uniform sampler2D uVorticity;
+uniform sampler2D uSmoke;
 uniform int uViewMode;
+uniform int uShowTrails;
 uniform float uScale;
 uniform float uDt;
 uniform float uFreestream;
@@ -27,6 +29,7 @@ vec3 colormap(float t) {
 }
 
 const vec3 BACKDROP = vec3(0.045, 0.055, 0.075);
+const vec3 SMOKE = vec3(0.93, 0.95, 0.97);
 
 void main() {
   vec3 field;
@@ -51,6 +54,40 @@ void main() {
     float w = sampleLinear(uVorticity, vUv).x * uRefLength / max(uFreestream, 1e-3);
     float k = tanh(w * uScale * 0.04);
     field = mix(BACKDROP, k > 0.0 ? vec3(0.95, 0.32, 0.18) : vec3(0.22, 0.55, 1.0), abs(k));
+  } else if (uViewMode == 4) {
+    // Pseudo-schlieren. A knife-edge schlieren system images the density
+    // gradient across the edge; at low Mach density follows pressure
+    // (isentropically), so the nondimensional gradient L * dCp/dy stands in.
+    // Grey where the flow is uniform, lighter/darker either side of
+    // compressions and expansions, vortex cores as light/dark pairs.
+    // Central difference over 4 cells, averaged across 3 columns: the
+    // projection leaves cell-scale pressure ripple along the stair-stepped
+    // wall that a 1-cell stencil turns into a row of specks.
+    vec2 px = 1.0 / vec2(textureSize(uPressure, 0));
+    float dp = 0.0;
+    for (int i = -1; i <= 1; i++) {
+      vec2 o = vec2(float(i) * 1.5 * px.x, 0.0);
+      dp += sampleLinear(uPressure, vUv + o + vec2(0.0, 2.0 * px.y)).x -
+            sampleLinear(uPressure, vUv + o - vec2(0.0, 2.0 * px.y)).x;
+    }
+    float g = dp / (12.0 * max(uDt * 0.5 * uFreestream * uFreestream, 1e-6)) * uRefLength;
+    // Square-root response, like a sensitive knife edge: the gentle far-field
+    // gradients still show while the leading edge saturates.
+    float k = tanh(sign(g) * sqrt(abs(g) * uScale * 0.25));
+    // That stencil reaches into the body, where pressure is meaningless;
+    // fade to neutral within reach of the wall.
+    float wall = 0.0;
+    for (int i = 0; i < 8; i++) {
+      float a = float(i) * 0.785398;
+      wall = max(wall, texture(uObstacle, vUv + vec2(cos(a), sin(a)) * 2.5 * px).x);
+    }
+    k *= 1.0 - wall;
+    field = vec3(0.30 + 0.28 * k) * vec3(1.0, 0.98, 0.94);
+  } else if (uViewMode == 5) {
+    // Smoke streams, lit against a black tunnel. Saturating, so where
+    // streams pile up (the separated wake) it reads as dense fog.
+    float d = texture(uSmoke, vUv).x;
+    field = mix(vec3(0.015, 0.018, 0.024), SMOKE, 1.0 - exp(-3.0 * d * uScale));
   } else {
     field = BACKDROP;
   }
@@ -59,6 +96,6 @@ void main() {
   vec3 base = mix(field, vec3(0.02, 0.03, 0.05), solid);
 
   // Trails are premultiplied alpha.
-  vec4 trail = texture(uTrail, vUv);
+  vec4 trail = uShowTrails == 1 ? texture(uTrail, vUv) : vec4(0.0);
   outColor = vec4(base * (1.0 - trail.a) + trail.rgb, 1.0);
 }

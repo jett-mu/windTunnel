@@ -38,6 +38,8 @@ const NUM_FIELDS: NumField[] = [
   num("n", RANGES.particleCount, (s) => s.solver.particleCount, (s, v) => (s.solver.particleCount = Math.round(v))),
   num("trail", RANGES.trailLength, (s) => s.solver.trailLength, (s, v) => (s.solver.trailLength = v)),
   num("fs", RANGES.pressureScale, (s) => s.solver.pressureScale, (s, v) => (s.solver.pressureScale = v)),
+  num("sn", RANGES.smokeStreams, (s) => s.solver.smokeStreams, (s, v) => (s.solver.smokeStreams = Math.round(v))),
+  num("ss", RANGES.smokeSpanPct, (s) => s.solver.smokeSpan * 100, (s, v) => (s.solver.smokeSpan = v / 100)),
   num("aoa", RANGES.aoaDeg, (s) => s.airfoil.aoaDeg, (s, v) => (s.airfoil.aoaDeg = v)),
   num("m", RANGES.maxCamberPct, (s) => s.airfoil.maxCamberPct, (s, v) => (s.airfoil.maxCamberPct = v)),
   num("p", RANGES.camberPosTenths, (s) => s.airfoil.camberPosTenths, (s, v) => (s.airfoil.camberPosTenths = v)),
@@ -53,7 +55,7 @@ const NUM_FIELDS: NumField[] = [
 const ENUM_FIELDS: EnumField[] = [
   {
     key: "view",
-    values: ["pressure", "speed", "vorticity", "none"],
+    values: ["pressure", "speed", "vorticity", "schlieren", "smoke", "none"],
     get: (s) => s.solver.viewMode,
     set: (s, v) => (s.solver.viewMode = v as ViewMode),
   },
