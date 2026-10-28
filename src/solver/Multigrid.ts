@@ -114,6 +114,28 @@ export class Multigrid {
     }
   }
 
+  /**
+   * Debug-only: relative residual ||rhs - L p|| / ||rhs|| of the finest
+   * level, i.e. how well the last solve converged. Synchronous readback.
+   */
+  measureResidual(gl: WebGL2RenderingContext): number {
+    const level = this.levels[0];
+    this.computeResidual(level);
+    const n = level.w * level.h;
+    const r = new Float32Array(n * 4);
+    gl.readPixels(0, 0, level.w, level.h, gl.RGBA, gl.FLOAT, r);
+    level.rhs.bind();
+    const b = new Float32Array(n * 4);
+    gl.readPixels(0, 0, level.w, level.h, gl.RGBA, gl.FLOAT, b);
+    let rr = 0;
+    let bb = 0;
+    for (let i = 0; i < n; i++) {
+      rr += r[i * 4] * r[i * 4];
+      bb += b[i * 4] * b[i * 4];
+    }
+    return Math.sqrt(rr / Math.max(bb, 1e-30));
+  }
+
   /** Warm-started V-cycles on the finest level's pressure. */
   solve(cycles: number): void {
     for (let c = 0; c < cycles; c++) this.vcycle(0);
@@ -134,17 +156,7 @@ export class Multigrid {
     }
 
     this.smooth(level, PRE_SMOOTH, SMOOTH_OMEGA);
-
-    level.residual.bind();
-    const rs = this.residualShader;
-    rs.use();
-    rs.setTexture(0, "uPressure", level.x.read.texture);
-    rs.setTexture(1, "uRhs", level.rhs.texture);
-    rs.setTexture(2, "uNeighbors", level.neighbors.texture);
-    rs.setTexture(3, "uObstacle", level.obstacle);
-    rs.setVec2("uTexel", level.texel[0], level.texel[1]);
-    rs.setFloat("uH2", level.h2);
-    this.quad.draw();
+    this.computeResidual(level);
 
     const coarse = this.levels[index + 1];
     coarse.rhs.bind();
@@ -164,6 +176,19 @@ export class Multigrid {
     level.x.swap();
 
     this.smooth(level, POST_SMOOTH, SMOOTH_OMEGA);
+  }
+
+  private computeResidual(level: Level): void {
+    level.residual.bind();
+    const rs = this.residualShader;
+    rs.use();
+    rs.setTexture(0, "uPressure", level.x.read.texture);
+    rs.setTexture(1, "uRhs", level.rhs.texture);
+    rs.setTexture(2, "uNeighbors", level.neighbors.texture);
+    rs.setTexture(3, "uObstacle", level.obstacle);
+    rs.setVec2("uTexel", level.texel[0], level.texel[1]);
+    rs.setFloat("uH2", level.h2);
+    this.quad.draw();
   }
 
   private smooth(level: Level, iterations: number, omega: number): void {

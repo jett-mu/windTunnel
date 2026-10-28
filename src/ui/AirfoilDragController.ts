@@ -101,12 +101,14 @@ export class AirfoilDragController {
     const angleNow = Math.atan2(e.clientY - anchorClient.y, e.clientX - anchorClient.x);
     // Rotating the grabbed point by this screen-space delta angle rotates
     // the whole rigid wing by the same amount, regardless of which point on
-    // the wing was grabbed. Unwrap across the +-180 degree seam.
+    // the wing was grabbed. Client y points down, so a positive delta is a
+    // clockwise turn on screen, which with the nose on the left is nose-up,
+    // i.e. +AoA. Unwrap across the +-180 degree seam.
     let delta = angleNow - this.dragStartAngle;
     if (delta > Math.PI) delta -= 2 * Math.PI;
     if (delta < -Math.PI) delta += 2 * Math.PI;
     const deltaDeg = (delta * 180) / Math.PI;
-    const newAoA = clamp(this.dragStartAoA - deltaDeg, AOA_MIN_DEG, AOA_MAX_DEG);
+    const newAoA = clamp(this.dragStartAoA + deltaDeg, AOA_MIN_DEG, AOA_MAX_DEG);
     this.airfoil.setParams({ aoaDeg: newAoA });
   };
 

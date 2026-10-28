@@ -2,8 +2,8 @@
 export const GRID_W = 512;
 export const GRID_H = 256;
 
-/** "multigrid" (default) or "jacobi" (the v1 solver, kept for A/B timing in `?debug`). */
-export const PRESSURE_SOLVER: "multigrid" | "jacobi" = "multigrid";
+/** "multigrid" (default) or "jacobi" (the v1 solver, selectable with `?solver=jacobi` for A/B comparison). */
+export type PressureSolver = "multigrid" | "jacobi";
 export const MULTIGRID_CYCLES = 1;
 export const JACOBI_ITERATIONS = 80;
 /** Velocity safety clamp, as a multiple of freestream speed. */

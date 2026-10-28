@@ -86,8 +86,9 @@ export class Simulation {
     this.params = state.solver;
 
     this.glCtx = new GLContext(this.canvas);
-    this.timer = new GpuTimer(this.glCtx.gl, new URLSearchParams(location.search).has("debug"));
-    this.solver = new FluidSolver(this.glCtx);
+    const query = new URLSearchParams(location.search);
+    this.timer = new GpuTimer(this.glCtx.gl, query.has("debug"));
+    this.solver = new FluidSolver(this.glCtx, query.get("solver") === "jacobi" ? "jacobi" : "multigrid");
     this.airfoil = new Airfoil(GRID_W, GRID_H, state.airfoil);
     this.obstacleMask = new ObstacleMask(this.glCtx.gl, GRID_W, GRID_H);
     this.sweep = new PolarSweep(this.airfoil);
@@ -130,6 +131,7 @@ export class Simulation {
     if (this.timer.enabled) {
       (window as unknown as { __wt: unknown }).__wt = {
         divergence: () => this.solver.measureDivergence(),
+        residual: () => this.solver.measureResidual(),
         forces: () => this.forceCalc.getLatestForces(),
       };
     }
@@ -150,6 +152,9 @@ export class Simulation {
   }
 
   private handleResize(): void {
+    // The lost event is dispatched asynchronously, so a resize can land
+    // between the context dying and dispose(); GPU allocations would throw.
+    if (this.glCtx.gl.isContextLost()) return;
     this.fitCanvas();
     this.particles.resizeTrail(this.canvas.width, this.canvas.height);
   }
@@ -197,7 +202,7 @@ export class Simulation {
   }
 
   private frame = (time: number): void => {
-    if (!this.running) return;
+    if (!this.running || this.glCtx.gl.isContextLost()) return;
     this.rafId = requestAnimationFrame(this.frame);
 
     const wallDt = Math.min(Math.max((time - this.lastFrameTime) / 1000, 0), MAX_FRAME_S);

@@ -2,6 +2,11 @@
   box-sizing: border-box;
 }
 
+/* Components set their own display; make the hidden attribute always win. */
+[hidden] {
+  display: none !important;
+}
+
 html, body {
   margin: 0;
   padding: 0;

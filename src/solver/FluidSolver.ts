@@ -6,12 +6,11 @@ import { Multigrid } from "./Multigrid";
 import {
   GRID_W,
   GRID_H,
-  PRESSURE_SOLVER,
   MULTIGRID_CYCLES,
   JACOBI_ITERATIONS,
   MAX_SPEED_FACTOR,
 } from "./SolverParams";
-import type { SolverParams } from "./SolverParams";
+import type { SolverParams, PressureSolver } from "./SolverParams";
 
 import passthroughVert from "./shaders/passthrough.vert?raw";
 import advectFrag from "./shaders/advect.frag?raw";
@@ -43,6 +42,7 @@ export class FluidSolver {
   private advectBackward: Framebuffer;
   private multigrid: Multigrid;
   private obstacle: WebGLTexture | null = null;
+  private pressureSolver: PressureSolver;
 
   private advectShader: Shader;
   private maccormackShader: Shader;
@@ -52,8 +52,9 @@ export class FluidSolver {
   private gradientSubtractShader: Shader;
   private boundaryShader: Shader;
 
-  constructor(glCtx: GLContext) {
+  constructor(glCtx: GLContext, pressureSolver: PressureSolver = "multigrid") {
     const gl = glCtx.gl;
+    this.pressureSolver = pressureSolver;
     this.gl = gl;
     this.quad = new FullscreenQuad(gl);
     this.texel = [1 / GRID_W, 1 / GRID_H];
@@ -189,7 +190,7 @@ export class FluidSolver {
     this.quad.draw();
 
     // 6. Pressure Poisson solve, warm-started from the previous step.
-    if (PRESSURE_SOLVER === "multigrid") this.multigrid.solve(MULTIGRID_CYCLES);
+    if (this.pressureSolver === "multigrid") this.multigrid.solve(MULTIGRID_CYCLES);
     else this.multigrid.jacobi(JACOBI_ITERATIONS);
 
     // 7. Subtract pressure gradient (projection).
@@ -205,6 +206,11 @@ export class FluidSolver {
 
     // 8. Re-enforce obstacle/boundary conditions post-projection.
     this.runBoundary(params.airspeed);
+  }
+
+  /** Debug-only (`?debug`): relative Poisson residual left by the last pressure solve. */
+  measureResidual(): number {
+    return this.multigrid.measureResidual(this.gl);
   }
 
   /**
