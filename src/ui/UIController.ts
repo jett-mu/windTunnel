@@ -48,6 +48,8 @@ const fmt1 = (v: number) => v.toFixed(1);
 const fmt0 = (v: number) => v.toFixed(0);
 const deg = (v: number) => `${v.toFixed(1)}°`;
 
+const LOG_STEPS = 1000;
+
 /** UI refresh rate for readouts and control sync; text changing faster than this is unreadable anyway. */
 const REFRESH_MS = 100;
 /** Time constant of the smoothed readouts, in simulated seconds. */
@@ -216,7 +218,7 @@ export class UIController {
       ["lift", "Lift", "Lift force, density-scaled sim units"],
       ["drag", "Drag", "Drag force, density-scaled sim units"],
       ["xcp", "C. of P. (x/c)", "Center of pressure along the chord"],
-      ["reynolds", "Reynolds", "Re = V·L/ν (nominal: numerical diffusion dominates at this grid size)"],
+      ["reynolds", "Reynolds", "Re = V·L/ν. Sets the wall model: high Re keeps flow attached, low Re separates it"],
     ];
     for (const [key, label, title] of keys) {
       const cell = document.createElement("div");
@@ -307,7 +309,13 @@ export class UIController {
     const sp = this.solverParams;
     this.addSlider({ label: "Airspeed", range: RANGES.airspeed, get: () => sp.airspeed, set: (v) => (sp.airspeed = v), format: fmt0 });
     this.addSlider({ label: "Air Density", range: RANGES.density, get: () => sp.density, set: (v) => (sp.density = v), format: fmt2 });
-    this.addSlider({ label: "Viscosity", range: RANGES.viscosity, get: () => sp.viscosity, set: (v) => (sp.viscosity = v), format: fmt2 });
+    this.addSlider({
+      label: "Viscosity",
+      range: RANGES.viscosity,
+      get: () => sp.viscosity,
+      set: (v) => (sp.viscosity = v),
+      format: (v) => (v < 0.1 ? v.toFixed(3) : v.toFixed(2)),
+    });
     this.addSlider({
       label: "Vortex Confinement",
       range: RANGES.vorticityEpsilon,
@@ -546,14 +554,18 @@ export class UIController {
     top.appendChild(value);
     row.appendChild(top);
 
+    // Log sliders run over 0..LOG_STEPS and map exponentially onto the range.
+    const { min, max, log } = cfg.range;
+    const toModel = (raw: number) => (log ? min * Math.pow(max / min, raw / LOG_STEPS) : raw);
+    const toSlider = (v: number) => (log ? (Math.log(v / min) / Math.log(max / min)) * LOG_STEPS : v);
     const input = document.createElement("input");
     input.type = "range";
-    input.min = String(cfg.range.min);
-    input.max = String(cfg.range.max);
-    input.step = String(cfg.range.step);
+    input.min = String(log ? 0 : min);
+    input.max = String(log ? LOG_STEPS : max);
+    input.step = String(log ? 1 : cfg.range.step);
     input.setAttribute("aria-label", cfg.label);
     input.addEventListener("input", () => {
-      cfg.set(parseFloat(input.value));
+      cfg.set(toModel(parseFloat(input.value)));
       // Read back: the model may clamp (e.g. position near a wall).
       shown = NaN;
       sync();
@@ -567,7 +579,7 @@ export class UIController {
       if (v !== shown) {
         shown = v;
         value.textContent = format(v);
-        if (document.activeElement !== input) input.value = String(v);
+        if (document.activeElement !== input) input.value = String(toSlider(v));
       }
       const disabled = cfg.disabled?.() ?? false;
       if (input.disabled !== disabled) input.disabled = disabled;

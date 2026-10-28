@@ -28,7 +28,7 @@ float rand(uint a, uint b) {
 // texture directly in the vertex shader (vertex texture fetch, core WebGL2),
 // so particles follow curved streamlines around the leading edge instead of
 // cutting the corner. Respawns it near the inlet if it has left the domain,
-// aged out, or drifted into the obstacle.
+// aged out, or ended up deep inside the obstacle.
 void main() {
   vec2 pos = aPosAge.xy;
   float age = aPosAge.z;
@@ -38,6 +38,22 @@ void main() {
   vec2 v2 = sampleLinear(uVelocity, mid).xy;
   pos += uDt * v2 * uVelScale;
   age += uDt;
+
+  // A particle that steps into the body's anti-aliased edge (the step can
+  // be a couple of cells at speed) is pushed back out along the mask
+  // gradient, so it slides along the surface. Killing it instead would
+  // strip particles from exactly the streamlines that hug the wall, leaving
+  // a misleading empty band around the body.
+  for (int k = 0; k < 2; k++) {
+    float s = texture(uObstacle, clamp(pos, 0.0, 1.0)).x;
+    if (s <= 0.4) break;
+    vec2 g = vec2(
+      texture(uObstacle, pos + vec2(uVelScale.x, 0.0)).x - texture(uObstacle, pos - vec2(uVelScale.x, 0.0)).x,
+      texture(uObstacle, pos + vec2(0.0, uVelScale.y)).x - texture(uObstacle, pos - vec2(0.0, uVelScale.y)).x
+    );
+    if (dot(g, g) < 1e-8) break;
+    pos -= normalize(g) * uVelScale * (s - 0.3) * 2.0;
+  }
 
   float solid = texture(uObstacle, clamp(pos, 0.0, 1.0)).x;
   bool outOfBounds = pos.x > 1.0 || pos.x < 0.0 || pos.y < 0.0 || pos.y > 1.0;

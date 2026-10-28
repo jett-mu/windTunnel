@@ -250,11 +250,16 @@ export class ForceCalculator {
     // step), i.e. physical pressure * dt / density. Integrate everything in
     // those solver units, then convert once.
     //
-    // Skin friction: wall shear tau = rho * nu * du_t/dn, with the
-    // tangential velocity at the sample point (SAMPLE_OFFSET_CELLS out from
-    // the no-slip wall) over that distance as the gradient. In solver units
-    // that's dt * nu * u_t / d per unit length.
-    const shearScale = (dt * viscosity) / SAMPLE_OFFSET_CELLS;
+    // Skin friction: the real boundary layer is usually far thinner than a
+    // grid cell (see wallModel.ts), so the wall shear can't be read off the
+    // grid's velocity gradient. Instead use the laminar flat-plate (Blasius)
+    // local shear, tau/rho = 0.332 u_e^2 / sqrt(Re_x), with the sampled
+    // tangential velocity just outside the wall as the edge velocity u_e and
+    // x the distance downstream of the body's front. Vector form:
+    // tau/rho = 0.332 * u_t * sqrt(|u_t| nu / x); times dt for solver units.
+    const shearScale = 0.332 * dt;
+    let frontX = Infinity;
+    for (const s of snap.samples) frontX = Math.min(frontX, s.point.x);
     let fx = 0;
     let fy = 0;
     let frictionX = 0;
@@ -270,8 +275,12 @@ export class ForceCalculator {
       let sy = -p * n.y * s.length;
       // Shear drags the surface along with the tangential flow.
       const vn = vx * n.x + vy * n.y;
-      const tx = shearScale * (vx - vn * n.x) * s.length;
-      const ty = shearScale * (vy - vn * n.y) * s.length;
+      const utx = vx - vn * n.x;
+      const uty = vy - vn * n.y;
+      const x = Math.max(s.point.x - frontX, 1);
+      const k = shearScale * Math.sqrt((Math.hypot(utx, uty) * viscosity) / x) * s.length;
+      const tx = k * utx;
+      const ty = k * uty;
       frictionX += tx;
       sx += tx;
       sy += ty;

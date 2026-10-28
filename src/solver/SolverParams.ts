@@ -22,7 +22,8 @@ export interface SolverParams {
    * forces only: the flow itself is incompressible, so coefficients are
    * independent of it. */
   density: number;
-  /** Kinematic viscosity, used both in diffusion and Re = V*c/nu. */
+  /** Kinematic viscosity, grid-cells^2/second. Sets Re = V*c/nu, which drives
+   * the wall model (boundary-layer slip), skin friction and diffusion. */
   viscosity: number;
   /** Vorticity confinement strength: artificial energy injected to offset
    * numerical diffusion of small vortices. Kept low by default, since the
@@ -50,7 +51,9 @@ export const TICK_RATE_MAX = 6;
 export const DEFAULT_SOLVER_PARAMS: SolverParams = {
   airspeed: 120,
   density: 1.0,
-  viscosity: 0.4,
+  // Re ~ 8e5 at the default airspeed and chord: full-size-wing territory,
+  // where flow stays attached at moderate angles of attack.
+  viscosity: 0.02,
   vorticityEpsilon: 0.15,
   dt: 1 / 60,
   tickRate: 1,

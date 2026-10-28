@@ -14,9 +14,11 @@ export interface Range {
   min: number;
   max: number;
   step: number;
+  /** Slider moves along a logarithmic scale (for quantities spanning decades). */
+  log?: boolean;
 }
 
-const r = (min: number, max: number, step: number): Range => ({ min, max, step });
+const r = (min: number, max: number, step: number, log = false): Range => ({ min, max, step, log });
 
 /**
  * Valid range and UI step for every user-tunable number, shared by the
@@ -26,7 +28,7 @@ const r = (min: number, max: number, step: number): Range => ({ min, max, step }
 export const RANGES = {
   airspeed: r(10, 400, 1),
   density: r(0.1, 3, 0.05),
-  viscosity: r(0.01, 2, 0.01),
+  viscosity: r(0.005, 2, 0.001, true),
   vorticityEpsilon: r(0, 1.5, 0.05),
   tickRate: r(TICK_RATE_MIN, TICK_RATE_MAX, 1),
   particleCount: r(1000, 50000, 1000),

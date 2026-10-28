@@ -14,6 +14,7 @@ import { UIController } from "./ui/UIController";
 import { AirfoilDragController } from "./ui/AirfoilDragController";
 import { downloadBlob } from "./ui/download";
 import { encodeState, decodeState } from "./state/UrlState";
+import { wallSlip } from "./solver/wallModel";
 
 const PARTICLE_COLOR: [number, number, number] = [0.85, 0.95, 1.0];
 /** CSS pixels; scaled by the backing-store DPR so particles look the same on any display. */
@@ -144,17 +145,26 @@ export class Simulation {
         divergence: () => this.solver.measureDivergence(),
         residual: () => this.solver.measureResidual(),
         forces: () => this.forceCalc.getLatestForces(),
+        dump: () => {
+          const d = this.solver.debugDump();
+          return { ...d, vel: Array.from(d.vel), div: Array.from(d.div), poly: this.airfoil.getWorldPolygon() };
+        },
         // Wall-clock ms per solver step over `n` back-to-back steps, GPU-synced.
         benchSolver: (n = 300) => {
-          for (let i = 0; i < 30; i++) this.solver.step(this.params.dt, this.params);
+          const slip = this.wallSlip();
+          for (let i = 0; i < 30; i++) this.solver.step(this.params.dt, this.params, slip);
           this.gpuSync();
           const t0 = performance.now();
-          for (let i = 0; i < n; i++) this.solver.step(this.params.dt, this.params);
+          for (let i = 0; i < n; i++) this.solver.step(this.params.dt, this.params, slip);
           this.gpuSync();
           return (performance.now() - t0) / n;
         },
       };
     }
+  }
+
+  private wallSlip(): number {
+    return wallSlip(this.params.airspeed, this.params.viscosity, this.airfoil.getReferenceLength());
   }
 
   /** Debug-only: blocks until the GPU has finished all queued solver work (1-texel readback). */
@@ -266,7 +276,8 @@ export class Simulation {
     const sample = this.debug && steps > 0 && ++this.debugFrame % 60 === 0;
     if (sample) this.gpuSync();
     const solverStart = performance.now();
-    for (let i = 0; i < steps; i++) this.solver.step(dt, this.params);
+    const slip = this.wallSlip();
+    for (let i = 0; i < steps; i++) this.solver.step(dt, this.params, slip);
     if (sample) {
       this.gpuSync();
       this.solverMs = (performance.now() - solverStart) / steps;

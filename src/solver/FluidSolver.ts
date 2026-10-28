@@ -112,7 +112,7 @@ export class FluidSolver {
     this.vorticity.clear();
   }
 
-  private runBoundary(airspeed: number): void {
+  private runBoundary(airspeed: number, slip: number): void {
     const s = this.boundaryShader;
     this.velocity.write.bind();
     s.use();
@@ -122,6 +122,7 @@ export class FluidSolver {
     s.setVec2("uTexel", this.texel[0], this.texel[1]);
     s.setFloat("uInflowSpeed", airspeed);
     s.setFloat("uMaxSpeed", airspeed * MAX_SPEED_FACTOR);
+    s.setFloat("uSlip", slip);
     this.quad.draw();
     this.velocity.swap();
   }
@@ -138,7 +139,8 @@ export class FluidSolver {
     this.quad.draw();
   }
 
-  step(dt: number, params: SolverParams): void {
+  /** `wallSlip`: obstacle wall slip factor, 0..1 (see wallModel.ts). */
+  step(dt: number, params: SolverParams, wallSlip: number): void {
     const gl = this.gl;
     if (!this.obstacle) throw new Error("FluidSolver.setObstacle must be called before step");
     gl.disable(gl.BLEND);
@@ -183,7 +185,7 @@ export class FluidSolver {
 
     // 4. Boundary conditions, so the projection below sees the inflow and
     //    the obstacle's no-penetration condition.
-    this.runBoundary(params.airspeed);
+    this.runBoundary(params.airspeed, wallSlip);
 
     // 5. Divergence.
     this.divergence.bind();
@@ -209,7 +211,19 @@ export class FluidSolver {
     this.velocity.swap();
 
     // 8. Re-enforce obstacle/boundary conditions post-projection.
-    this.runBoundary(params.airspeed);
+    this.runBoundary(params.airspeed, wallSlip);
+  }
+
+  /** Debug-only (`?debug`): raw velocity (u, v) and post-projection divergence fields. */
+  debugDump(): { w: number; h: number; vel: Float32Array; div: Float32Array } {
+    const gl = this.gl;
+    this.measureDivergence();
+    const div = new Float32Array(GRID_W * GRID_H * 4);
+    gl.readPixels(0, 0, GRID_W, GRID_H, gl.RGBA, gl.FLOAT, div);
+    this.velocity.read.bind(true);
+    const vel = new Float32Array(GRID_W * GRID_H * 4);
+    gl.readPixels(0, 0, GRID_W, GRID_H, gl.RGBA, gl.FLOAT, vel);
+    return { w: GRID_W, h: GRID_H, vel, div };
   }
 
   /** Debug-only (`?debug`): relative Poisson residual left by the last pressure solve. */
