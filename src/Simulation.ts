@@ -71,6 +71,8 @@ export class Simulation {
   private cpuMs = 0;
   private simTime = 0;
   private accumulator = 0;
+  /** Freestream speed the solver's current flow field was built for. */
+  private flowAirspeed = 0;
   private trailWallS = 0;
   private paused = false;
   private pendingSteps = 0;
@@ -136,6 +138,7 @@ export class Simulation {
 
     this.syncObstacle();
     this.solver.reset(this.params.airspeed);
+    this.flowAirspeed = this.params.airspeed;
 
     this.resizeObserver = new ResizeObserver(() => this.handleResize());
     this.resizeObserver.observe(this.stage);
@@ -210,6 +213,7 @@ export class Simulation {
 
   private resetFlow(): void {
     this.solver.reset(this.params.airspeed);
+    this.flowAirspeed = this.params.airspeed;
     this.particles.clearTrails();
     this.smoke.clear();
     this.forceCalc.reset();
@@ -255,6 +259,10 @@ export class Simulation {
     const cpuStart = performance.now();
 
     this.syncObstacle();
+    if (this.params.airspeed !== this.flowAirspeed) {
+      this.solver.rescale(this.params.airspeed / this.flowAirspeed);
+      this.flowAirspeed = this.params.airspeed;
+    }
 
     // Fixed-dt sub-stepping from a wall-clock accumulator: tickRate scales
     // simulated seconds per real second without enlarging dt itself, so

@@ -20,6 +20,7 @@ import vorticityFrag from "./shaders/vorticity.frag?raw";
 import divergenceFrag from "./shaders/divergence.frag?raw";
 import gradientSubtractFrag from "./shaders/gradientSubtract.frag?raw";
 import boundaryFrag from "./shaders/boundary.frag?raw";
+import scaleFrag from "./shaders/scale.frag?raw";
 
 /** Explicit diffusion is stable for nu*dt < 0.25; stay well inside that. */
 const MAX_DIFFUSION_ALPHA = 0.2;
@@ -51,6 +52,7 @@ export class FluidSolver {
   private divergenceShader: Shader;
   private gradientSubtractShader: Shader;
   private boundaryShader: Shader;
+  private scaleShader: Shader;
 
   private multigridCycles: number;
 
@@ -85,6 +87,7 @@ export class FluidSolver {
     this.divergenceShader = new Shader(gl, passthroughVert, divergenceFrag);
     this.gradientSubtractShader = new Shader(gl, passthroughVert, gradientSubtractFrag);
     this.boundaryShader = new Shader(gl, passthroughVert, boundaryFrag);
+    this.scaleShader = new Shader(gl, passthroughVert, scaleFrag);
   }
 
   getVelocityTexture(): WebGLTexture {
@@ -110,6 +113,31 @@ export class FluidSolver {
     this.velocity.clear(airspeed, 0, 0, 0);
     this.pressure.clear();
     this.vorticity.clear();
+  }
+
+  /**
+   * Rescales the current flow to a new freestream speed (`ratio` = new/old).
+   * Changing only the inlet would force the projection to accelerate the
+   * whole incompressible tunnel in one step: a huge one-frame pressure spike
+   * that flashes the display and the force readouts. Scaling velocity by
+   * `ratio` (and pressure, which goes as U^2, by `ratio^2`) keeps the field
+   * divergence-free and consistent with the new inflow.
+   */
+  rescale(ratio: number): void {
+    const gl = this.gl;
+    gl.disable(gl.BLEND);
+    this.scaleField(this.velocity, ratio);
+    this.scaleField(this.pressure, ratio * ratio);
+  }
+
+  private scaleField(field: DoubleFBO, scale: number): void {
+    const s = this.scaleShader;
+    field.write.bind();
+    s.use();
+    s.setTexture(0, "uSource", field.read.texture);
+    s.setFloat("uScale", scale);
+    this.quad.draw();
+    field.swap();
   }
 
   private runBoundary(airspeed: number, slip: number): void {
