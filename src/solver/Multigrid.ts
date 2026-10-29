@@ -9,6 +9,8 @@ import restrictFrag from "./shaders/restrict.frag?raw";
 import restrictResidualFrag from "./shaders/restrictResidual.frag?raw";
 import coarseSolveFrag from "./shaders/coarseSolve.frag?raw";
 import obstacleNeighborsFrag from "./shaders/obstacleNeighbors.frag?raw";
+import lineResidualFrag from "./shaders/lineResidual.frag?raw";
+import lineSolveFrag from "./shaders/lineSolve.frag?raw";
 
 /** Smallest level's height in cells; 256 -> 4 gives a 7-level hierarchy whose
  * 8x4 coarsest grid is solved directly in one pass (see coarseSolve.frag). */
@@ -18,6 +20,8 @@ const COARSEST_H = 4;
  * is for much faster than (damped) Jacobi, at identical cost per pass. */
 const PRE_SMOOTH = 2;
 const POST_SMOOTH = 2;
+/** Segments each column is split into for the line correction's residual sums. */
+const LINE_SEGMENTS = 16;
 
 interface Level {
   w: number;
@@ -53,6 +57,14 @@ export class Multigrid {
   /** Debug-only scratch target for `measureResidual`. */
   private debugResidual: Framebuffer;
   private neighborsShader: Shader;
+  private lineResidualShader: Shader;
+  private lineSolveShader: Shader;
+  /** W x LINE_SEGMENTS: per-segment summed residual and right-face open area. */
+  private lineResidual: Framebuffer;
+  /** W x 1: the same, totalled per column. */
+  private lineTotals: Framebuffer;
+  /** W x 1: the column-uniform correction from `lineCorrect`. */
+  private lineCorrection: Framebuffer;
 
   constructor(
     gl: WebGL2RenderingContext,
@@ -96,6 +108,13 @@ export class Multigrid {
     });
     this.debugResidual = new Framebuffer(gl, fine.w, fine.h, fmt.R32F, gl.NEAREST);
     this.neighborsShader = new Shader(gl, passthroughVert, obstacleNeighborsFrag);
+    this.lineResidualShader = new Shader(gl, passthroughVert, lineResidualFrag, {
+      defines: [`LINE_SEGMENTS ${LINE_SEGMENTS}`],
+    });
+    this.lineSolveShader = new Shader(gl, passthroughVert, lineSolveFrag);
+    this.lineResidual = new Framebuffer(gl, fine.w, LINE_SEGMENTS, fmt.RG32F, gl.NEAREST);
+    this.lineTotals = new Framebuffer(gl, fine.w, 1, fmt.RG32F, gl.NEAREST);
+    this.lineCorrection = new Framebuffer(gl, fine.w, 1, fmt.R32F, filter);
   }
 
   /** Packed (L, R, B, T) solid fractions at the finest level, shared with the other solver passes. */
@@ -152,9 +171,50 @@ export class Multigrid {
     return Math.sqrt(rr / Math.max(bb, 1e-30));
   }
 
-  /** Warm-started V-cycles on the finest level's pressure. */
+  /**
+   * Warm-started V-cycles on the finest level's pressure, then the exact
+   * column-uniform correction from `lineCorrect`, added in one more
+   * smoothing pass.
+   */
   solve(cycles: number): void {
     for (let c = 0; c < cycles; c++) this.vcycle(0);
+    this.lineCorrect();
+    this.smooth(this.levels[0], 1, true, { coarse: this.lineCorrection.texture });
+  }
+
+  /**
+   * Solves exactly for the part of the error that is uniform down each
+   * column: a pressure level that varies only along the tunnel. That mode
+   * carries the per-step mismatch in volume flux between cross-sections,
+   * which is large and erratic once the wake is turbulent. The V-cycle only
+   * gets it partly right from a warm start (its coarse grids see the slender
+   * airfoil only approximately), and the remainder rocks the whole field's
+   * level up and down from one step to the next, flashing the pressure view.
+   * It has to come last: the V-cycle's own coarse-grid corrections leak
+   * error back into this mode. Three small passes (sum, total, solve).
+   */
+  private lineCorrect(): void {
+    const fine = this.levels[0];
+    this.lineResidual.bind();
+    const lr = this.lineResidualShader;
+    lr.use();
+    lr.setTexture(0, "uPressure", fine.x.read.texture);
+    lr.setTexture(1, "uRhs", fine.rhs.texture);
+    lr.setTexture(2, "uNeighbors", fine.neighbors.texture);
+    lr.setTexture(3, "uObstacle", fine.obstacle);
+    this.quad.draw();
+
+    const ls = this.lineSolveShader;
+    this.lineTotals.bind();
+    ls.use();
+    ls.setTexture(0, "uLine", this.lineResidual.texture);
+    ls.setInt("uReduce", 1);
+    this.quad.draw();
+
+    this.lineCorrection.bind();
+    ls.setTexture(0, "uLine", this.lineTotals.texture);
+    ls.setInt("uReduce", 0);
+    this.quad.draw();
   }
 
   /** Plain fine-grid Jacobi, kept for A/B comparison against the V-cycle. */
